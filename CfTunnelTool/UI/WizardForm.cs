@@ -152,7 +152,7 @@ sealed class WizardForm : Form
         side.Controls.Add(list);
         side.Controls.Add(new Label
         {
-            Text = $"v{Theme.Version}　使用 Cloudflare Tunnel",
+            Text = $"v{Theme.Version}　鴻森智能科技",
             Dock = DockStyle.Bottom,
             Height = 36,
             Font = Theme.Small,

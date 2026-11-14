@@ -20,13 +20,7 @@ sealed partial class RdpStep : StepPage
     readonly CheckBox _totp, _securityKey, _biometrics;
     readonly ComboBox _session;
     readonly CheckBox _clipText, _fileUpload, _fileDownload;
-    readonly Label _hostStatus;
-    readonly Button _enableHost;
-    readonly ComboBox _account;
-    readonly TextBox _pwd1, _pwd2;
-    readonly CheckBox _keepAutoLogon;
-    readonly Button _setPassword;
-    readonly Label _accountHint;
+    readonly HostAccountPanel _host;
     bool _loaded;
 
     public override string SidebarTitle => "遠端桌面";
@@ -115,30 +109,10 @@ sealed partial class RdpStep : StepPage
         S(Add(_fileUpload, stretch: false));
         S(Add(_fileDownload, stretch: false));
 
-        // ---- 這台電腦 ----
-        S(AddText("這台電腦的遠端桌面：", Theme.Bold, top: 12, bottom: 2));
-        _hostStatus = InlineLabel("檢查中…");
-        _enableHost = Theme.SecondaryButton("啟用這台電腦的遠端桌面");
-        _enableHost.Click += async (_, _) => await EnableHostAsync();
-        var openSettings = Theme.SecondaryButton("Windows 遠端桌面設定 ↗");
-        openSettings.Click += (_, _) => RdpHost.OpenSettings();
-        S(AddRow(_hostStatus, _enableHost, openSettings));
-
-        // ---- 這台電腦的遠端登入密碼 ----
-        S(AddText("這台電腦的遠端登入密碼：", Theme.Bold, top: 12, bottom: 2));
-        S(AddText("遠端桌面必須用有密碼的 Windows 帳號登入。帳號原本是空白密碼的話，可以在這裡設定密碼，" +
-                  "並保留開機自動登入，在電腦前面使用時和原本一樣不用輸入密碼。", Theme.Small, Theme.Muted, bottom: 4));
-        _account = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, Margin = new Padding(0, 4, 8, 0) };
-        _account.SelectedIndexChanged += (_, _) => UpdateAccountHint();
-        S(AddRow(InlineLabel("Windows 帳號："), _account));
-        _pwd1 = new TextBox { Width = 200, UseSystemPasswordChar = true, Margin = new Padding(0, 4, 12, 0) };
-        _pwd2 = new TextBox { Width = 200, UseSystemPasswordChar = true, Margin = new Padding(0, 4, 0, 0) };
-        S(AddRow(InlineLabel("新密碼："), _pwd1, InlineLabel("再輸入一次："), _pwd2));
-        _keepAutoLogon = Check("保留開機自動登入（在電腦前面使用時不用輸入密碼）", true);
-        _setPassword = Theme.SecondaryButton("設定密碼");
-        _setPassword.Click += async (_, _) => await SetPasswordAsync();
-        S(AddRow(_keepAutoLogon, _setPassword));
-        _accountHint = S(AddText("讀取帳號中…", Theme.Small, Theme.Muted, top: 2, bottom: 4));
+        // ---- 這台電腦（遠端桌面狀態、遠端登入密碼、交還畫面捷徑） ----
+        _host = S(Add(new HostAccountPanel()));
+        S(AddText("區網的其他電腦：在那台電腦上執行 CfTunnelTool，選「這台電腦要被遠端連線」，也能做上面這些設定。",
+            Theme.Small, Theme.Muted, top: 2, bottom: 4));
 
         AddHelpBox("使用者怎麼連線？",
             "【WARP ＋ 遠端桌面連線】\n" +
@@ -313,55 +287,9 @@ sealed partial class RdpStep : StepPage
         }
     }
 
-    void RefreshHostStatus()
-    {
-        var s = RdpHost.GetStatus();
-        if (s.IsHomeEdition)
-        {
-            _hostStatus.Text = "✗ Windows 家用版無法當遠端桌面主機（可以只當中繼，開放區網其他電腦）";
-            _hostStatus.ForeColor = Theme.Danger;
-            _enableHost.Visible = false;
-        }
-        else if (!s.Enabled)
-        {
-            _hostStatus.Text = "! 尚未啟用";
-            _hostStatus.ForeColor = Theme.Warning;
-            _enableHost.Visible = true;
-        }
-        else
-        {
-            var notes = new List<string> { $"✓ 已啟用（連接埠 {s.Port}" + (s.NlaRequired ? "，NLA 開啟）" : "）") };
-            if (!s.SecurityLayerOk) notes.Add("! 安全性層是舊的「RDP」模式，瀏覽器無法連線，請改為「協商」或「SSL」");
-            _hostStatus.Text = string.Join("　", notes);
-            _hostStatus.ForeColor = s.SecurityLayerOk ? Theme.Success : Theme.Warning;
-            _enableHost.Visible = false;
-        }
-    }
-
-    async Task EnableHostAsync()
-    {
-        _enableHost.Enabled = false;
-        try
-        {
-            await Task.Run(RdpHost.EnableRemoteDesktop);
-            MessageBox.Show(FindForm(), "已啟用這台電腦的遠端桌面，並開放防火牆規則。", "遠端桌面",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            MessageBox.Show(FindForm(), "啟用失敗：\n\n" + ex.Message, "遠端桌面", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-        finally
-        {
-            _enableHost.Enabled = true;
-            RefreshHostStatus();
-        }
-    }
-
     void UpdateEnabled()
     {
         foreach (var c in _settings) c.Enabled = _enable.Checked;
-        if (_account.Items.Count > 0) UpdateAccountHint();
     }
 
     public override void OnEnter()
@@ -396,111 +324,8 @@ sealed partial class RdpStep : StepPage
                 AddThisComputer(focus: false);
             }
             UpdateEnabled();
-            _ = LoadAccountsAsync();
         }
-        RefreshHostStatus();
-    }
-
-    // ---------- 遠端登入密碼 ----------
-
-    async Task LoadAccountsAsync()
-    {
-        var users = await Task.Run(LocalAccount.ListUsers);
-        if (IsDisposed) return;
-        _account.Items.Clear();
-        foreach (var u in users) _account.Items.Add(u);
-
-        // 預設選開機自動登入的帳號，其次是目前執行本程式的帳號
-        var auto = LocalAccount.GetAutoLogon();
-        var current = LocalAccount.CurrentUserName();
-        var pick = users.FirstOrDefault(u => auto.Enabled && u.Name.Equals(auto.UserName, StringComparison.OrdinalIgnoreCase))
-                   ?? users.FirstOrDefault(u => u.Name.Equals(current, StringComparison.OrdinalIgnoreCase))
-                   ?? users.FirstOrDefault();
-        if (pick is not null) _account.SelectedItem = pick;
-        UpdateAccountHint();
-    }
-
-    void UpdateAccountHint()
-    {
-        if (_account.SelectedItem is not LocalUser u)
-        {
-            _accountHint.Text = _account.Items.Count == 0 ? "讀不到這台電腦的帳號清單。" : "";
-            return;
-        }
-
-        var local = u.IsLocal;
-        _pwd1.Enabled = _pwd2.Enabled = _keepAutoLogon.Enabled = _setPassword.Enabled = local && _enable.Checked;
-        var auto = LocalAccount.GetAutoLogon();
-        var autoText = auto.Enabled ? $"目前開機自動登入：{auto.UserName}" : "目前沒有設定開機自動登入";
-
-        if (local)
-        {
-            _accountHint.Text = $"遠端登入時，帳號請輸入 {LocalAccount.RemoteLoginName(u.Name)}，密碼輸入在這裡設定的密碼。　（{autoText}）";
-            _accountHint.ForeColor = Theme.Muted;
-        }
-        else if (u.Source == "MicrosoftAccount")
-        {
-            _accountHint.Text = "這是 Microsoft 帳號，密碼要到 account.microsoft.com 修改，這裡無法設定。" +
-                                "遠端登入時，帳號輸入 MicrosoftAccount\\你的信箱，密碼輸入 Microsoft 帳號密碼（不是 PIN）。";
-            _accountHint.ForeColor = Theme.Warning;
-        }
-        else
-        {
-            _accountHint.Text = "這是網域或 Entra ID 帳號，密碼由公司管理，這裡無法設定。";
-            _accountHint.ForeColor = Theme.Warning;
-        }
-    }
-
-    async Task SetPasswordAsync()
-    {
-        if (_account.SelectedItem is not LocalUser { IsLocal: true } u) return;
-        var pwd = _pwd1.Text;
-        string? problem =
-            pwd.Length == 0 ? "請輸入新密碼。" :
-            pwd != _pwd2.Text ? "兩次輸入的密碼不一樣。" :
-            pwd.Length < 8 ? "密碼至少要 8 個字元（建議 12 個以上）。" :
-            new[] { pwd.Any(char.IsUpper), pwd.Any(char.IsLower), pwd.Any(char.IsDigit), pwd.Any(c => !char.IsLetterOrDigit(c)) }
-                .Count(x => x) < 3 ? "密碼請至少混合大寫、小寫、數字、符號其中三種。" :
-            pwd.Contains(u.Name, StringComparison.OrdinalIgnoreCase) ? "密碼不能包含帳號名稱。" :
-            null;
-        if (problem is not null)
-        {
-            MessageBox.Show(FindForm(), problem, "設定密碼", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        var keep = _keepAutoLogon.Checked;
-        var confirmText =
-            $"確定要把「{u.Name}」的 Windows 密碼設定為剛才輸入的密碼嗎？\n\n" +
-            (keep ? "開機會繼續自動登入這個帳號，在電腦前面使用時不用輸入密碼。\n" +
-                    "注意：任何人坐到這台電腦前都能直接使用，電腦放在公共區域時請設定螢幕保護程式鎖定。\n\n"
-                  : "之後在這台電腦前面登入也需要輸入這組密碼。\n\n") +
-            "請記住這組密碼，遠端桌面登入時會用到。";
-        if (MessageBox.Show(FindForm(), confirmText, "設定密碼", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            return;
-
-        _setPassword.Enabled = false;
-        try
-        {
-            await Task.Run(() => LocalAccount.SetRemotePassword(u.Name, pwd, keep));
-            _pwd1.Clear();
-            _pwd2.Clear();
-            MessageBox.Show(FindForm(),
-                "密碼已設定" + (keep ? "，開機仍會自動登入。" : "。") + "\n\n" +
-                $"遠端桌面登入時：\n帳號：{LocalAccount.RemoteLoginName(u.Name)}\n密碼：剛才設定的密碼",
-                "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException
-                                       or System.Security.SecurityException
-                                       or System.Security.Principal.IdentityNotMappedException)
-        {
-            MessageBox.Show(FindForm(), ex.Message, "設定密碼失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-        finally
-        {
-            _setPassword.Enabled = true;
-            UpdateAccountHint();
-        }
+        _ = _host.LoadAsync();
     }
 
     RdpConfig BuildConfig()
@@ -562,7 +387,7 @@ sealed partial class RdpStep : StepPage
                     {
                         MessageBox.Show(FindForm(), "啟用失敗：\n\n" + ex.Message, "遠端桌面", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
-                    RefreshHostStatus();
+                    _host.RefreshStatus();
                 }
             }
         }

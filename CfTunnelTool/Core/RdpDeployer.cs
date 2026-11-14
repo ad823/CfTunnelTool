@@ -41,11 +41,19 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         current.PolicyId ??= previous.PolicyId;
         current.VnetId ??= previous.VnetId;
         current.AuthDomain ??= previous.AuthDomain;
-        current.LauncherAppId ??= previous.LauncherAppId;
+        if (current.LauncherAppId is null)
+        {
+            current.LauncherAppId = previous.LauncherAppId;
+            current.LauncherOwned = previous.LauncherOwned;
+        }
         current.LauncherPolicyId ??= previous.LauncherPolicyId;
         current.WarpAppId ??= previous.WarpAppId;
         current.WarpPolicyId ??= previous.WarpPolicyId;
-        current.WarpEnrollAppId ??= previous.WarpEnrollAppId;
+        if (current.WarpEnrollAppId is null)
+        {
+            current.WarpEnrollAppId = previous.WarpEnrollAppId;
+            current.WarpEnrollOwned = previous.WarpEnrollOwned;
+        }
         foreach (var m in current.Machines)
         {
             var old = previous.Machines.FirstOrDefault(p => p.Name.Equals(m.Name, StringComparison.OrdinalIgnoreCase));
@@ -246,26 +254,42 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     {
         if (rdp.LauncherPolicyId is null)
         {
-            log.Warn("沒有可用的註冊政策（App Launcher 不是本工具建立的），請到 Zero Trust → Team & Resources → Devices → " +
+            log.Warn("沒有可用的註冊政策，請到 Zero Trust → Team & Resources → Devices → " +
                      "Device enrollment permissions 確認允許這些 Email 註冊：" + string.Join("、", rdp.AllowedEmails));
             return;
         }
+
+        // 已記錄的應用程式（自己建立的，或之前加入的共用應用程式）：確保本地點的政策在裡面，保留其他地點的政策
         if (rdp.WarpEnrollAppId is not null && await cf.AppExistsAsync(acc, rdp.WarpEnrollAppId))
         {
-            await cf.UpdateWarpEnrollAppAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId);
+            await cf.AttachPolicyAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId);
             log.Ok("WARP 註冊權限已更新");
             return;
         }
+
         var existing = await cf.FindAppIdByTypeAsync(acc, "warp");
         if (existing is null)
         {
             rdp.WarpEnrollAppId = await cf.CreateWarpEnrollAppAsync(acc, rdp.LauncherPolicyId);
+            rdp.WarpEnrollOwned = true;
             log.Ok("已設定 WARP 註冊權限（允許的 Email 才能註冊）");
             return;
         }
-        log.Warn("這個帳號原本就有 WARP 裝置註冊設定（不是本工具建立的），沒有修改它。" +
-                 "請到 Zero Trust → Team & Resources → Devices → Device enrollment permissions 確認允許這些 Email：" +
-                 string.Join("、", rdp.AllowedEmails));
+
+        // 帳號已經有 WARP 註冊設定（其他地點或手動建立的）：把本地點的 Email 加進去，不影響原本的設定
+        try
+        {
+            await cf.AttachPolicyAsync(acc, existing, rdp.LauncherPolicyId);
+            rdp.WarpEnrollAppId = existing;
+            rdp.WarpEnrollOwned = false;
+            log.Ok("已把本地點允許的 Email 加入現有的 WARP 註冊權限（與其他地點共用）");
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            log.Warn("無法自動加入現有的 WARP 註冊權限，請到 Zero Trust → Team & Resources → Devices → " +
+                     "Device enrollment permissions 確認允許這些 Email：" + string.Join("、", rdp.AllowedEmails));
+            log.Info(ex.Message);
+        }
     }
 
     /// <summary>
@@ -333,8 +357,10 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         log.Step("移除 WARP 遠端桌面設定");
         if (rdp.WarpAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpAppId)) log.Ok("已刪除 WARP 遠端桌面應用程式");
         if (rdp.WarpPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.WarpPolicyId)) log.Ok("已刪除 WARP 登入政策");
-        if (rdp.WarpEnrollAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpEnrollAppId)) log.Ok("已刪除 WARP 註冊權限");
+        if (rdp.WarpEnrollAppId is not null)
+            await ReleaseSharedAppAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId, rdp.WarpEnrollOwned, "WARP 註冊權限");
         rdp.WarpAppId = rdp.WarpPolicyId = rdp.WarpEnrollAppId = null;
+        rdp.WarpEnrollOwned = true;
         log.Info("Split Tunnel 中讓電腦 IP 走 WARP 的設定保留不動（不影響其他使用者）。");
     }
 
@@ -375,7 +401,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
     /// <summary>
     /// 建立或更新 App Launcher，讓允許的使用者能登入 team 網域註冊 2FA 裝置。
-    /// 帳號已有不是本工具建立的 App Launcher 時不修改它，只提醒管理者確認政策。
+    /// 每個帳號只能有一個 App Launcher：已經存在（其他地點或手動建立）時，把本地點的政策加進去，
+    /// 保留其他地點的政策，多個地點的允許 Email 會自動合併。
     /// </summary>
     async Task EnsureAppLauncherAsync(string acc, RdpConfig rdp, string tunnelName)
     {
@@ -387,8 +414,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
         if (rdp.LauncherAppId is not null && await cf.AppExistsAsync(acc, rdp.LauncherAppId))
         {
-            await cf.UpdateAppLauncherAsync(acc, rdp.LauncherAppId, rdp.LauncherPolicyId);
-            log.Ok("2FA 註冊入口已更新");
+            await cf.AttachPolicyAsync(acc, rdp.LauncherAppId, rdp.LauncherPolicyId);
+            log.Ok(rdp.LauncherOwned ? "2FA 註冊入口已更新" : "2FA 註冊入口已更新（與其他地點共用）");
             return;
         }
 
@@ -396,16 +423,41 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         if (existing is null)
         {
             rdp.LauncherAppId = await cf.CreateAppLauncherAsync(acc, rdp.LauncherPolicyId);
+            rdp.LauncherOwned = true;
             log.Ok("已建立 2FA 註冊入口（App Launcher）");
             return;
         }
 
-        // 帳號原本就有 App Launcher：不覆寫別人的設定，政策也不需要了
-        await cf.DeletePolicyAsync(acc, rdp.LauncherPolicyId);
-        rdp.LauncherPolicyId = null;
-        log.Warn("這個帳號原本就有 App Launcher（不是本工具建立的），沒有修改它。" +
-                 "請到 Zero Trust → Access controls → Applications → App Launcher 確認它的政策允許這些 Email：" +
-                 string.Join("、", rdp.AllowedEmails) + "，否則使用者無法註冊 2FA。");
+        try
+        {
+            await cf.AttachPolicyAsync(acc, existing, rdp.LauncherPolicyId);
+            rdp.LauncherAppId = existing;
+            rdp.LauncherOwned = false;
+            log.Ok("已把本地點允許的 Email 加入現有的 2FA 註冊入口（與其他地點共用）");
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            log.Warn("無法自動加入現有的 App Launcher。請到 Zero Trust → Access controls → Applications → App Launcher " +
+                     "確認它的政策允許這些 Email：" + string.Join("、", rdp.AllowedEmails) + "，否則使用者無法註冊 2FA。");
+            log.Info(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 從共用的應用程式（App Launcher、WARP 註冊權限）移除本地點的政策。
+    /// 是自己建立的、而且已經沒有其他地點的政策時，才刪除整個應用程式。
+    /// </summary>
+    async Task ReleaseSharedAppAsync(string acc, string appId, string? policyId, bool owned, string label)
+    {
+        var remaining = policyId is null ? 0 : await cf.DetachPolicyAsync(acc, appId, policyId);
+        if (owned && remaining == 0)
+        {
+            if (await cf.DeleteAppAsync(acc, appId)) log.Ok($"已刪除{label}");
+        }
+        else if (remaining > 0)
+        {
+            log.Ok($"已從{label}移除本地點的 Email（其他地點仍在使用，保留{label}）");
+        }
     }
 
     async Task EnsureRouteAsync(string acc, RdpMachine m, string tunnelId, string vnetId, string tunnelName)
@@ -513,11 +565,12 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             log.Ok("已刪除遠端桌面應用程式");
         if (rdp.PolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.PolicyId))
             log.Ok("已刪除登入政策");
-        if (rdp.LauncherAppId is not null && await cf.DeleteAppAsync(acc, rdp.LauncherAppId))
-            log.Ok("已刪除 2FA 註冊入口（App Launcher）");
+        if (rdp.LauncherAppId is not null)
+            await ReleaseSharedAppAsync(acc, rdp.LauncherAppId, rdp.LauncherPolicyId, rdp.LauncherOwned, "2FA 註冊入口（App Launcher）");
         if (rdp.LauncherPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.LauncherPolicyId))
             log.Ok("已刪除 App Launcher 政策");
         rdp.LauncherAppId = rdp.LauncherPolicyId = null;
+        rdp.LauncherOwned = true;
         foreach (var m in rdp.Machines)
             await RemoveMachineAsync(acc, m);
         if (!string.IsNullOrEmpty(rdp.Hostname))

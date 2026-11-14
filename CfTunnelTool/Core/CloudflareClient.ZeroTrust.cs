@@ -278,8 +278,6 @@ sealed partial class CloudflareClient
     public async Task<string> CreateWarpEnrollAppAsync(string accountId, string policyId)
         => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", WarpEnrollBody(policyId)))!["id"]!.GetValue<string>();
 
-    public async Task UpdateWarpEnrollAppAsync(string accountId, string appId, string policyId)
-        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", WarpEnrollBody(policyId));
 
     /// <summary>WARP 連線政策：同一批 Email ＋ 2FA（沒有瀏覽器 RDP 的剪貼簿規則）。</summary>
     internal static object WarpPolicyBody(string name, RdpConfig rdp) => new
@@ -325,6 +323,64 @@ sealed partial class CloudflareClient
     public async Task UpdatePrivateRdpAppAsync(string accountId, string appId, string name, RdpConfig rdp, string policyId)
         => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", PrivateRdpAppBody(name, rdp, policyId));
 
+    // ---------- 共用應用程式的政策（多地點） ----------
+
+    /// <summary>應用程式目前套用的政策 ID（依優先順序）。</summary>
+    public async Task<List<string>> GetAppPolicyIdsAsync(string accountId, string appId)
+    {
+        var app = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/access/apps/{appId}");
+        return app?["policies"]?.AsArray()
+            .Where(p => p?["id"] is not null)
+            .OrderBy(p => p?["precedence"]?.GetValue<int>() ?? int.MaxValue)
+            .Select(p => p!["id"]!.GetValue<string>())
+            .ToList() ?? [];
+    }
+
+    /// <summary>
+    /// 只更換應用程式的政策清單，其他設定保持原樣：先 GET 完整設定，移除唯讀欄位與空值後再 PUT 回去。
+    /// </summary>
+    async Task SetAppPoliciesAsync(string accountId, string appId, List<string> policyIds)
+    {
+        var app = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/access/apps/{appId}") as JsonObject
+                  ?? throw new CloudflareApiException("讀不到應用程式設定。");
+        await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", WithPolicies(app, policyIds));
+    }
+
+    /// <summary>複製應用程式設定，移除唯讀欄位與空值，並換上新的政策清單（依順序設定 precedence）。</summary>
+    internal static JsonObject WithPolicies(JsonObject app, List<string> policyIds)
+    {
+        var body = (JsonObject)app.DeepClone();
+        foreach (var key in new[] { "id", "uid", "aud", "created_at", "updated_at", "policies" }) body.Remove(key);
+        foreach (var key in body.Where(p => p.Value is null).Select(p => p.Key).ToList()) body.Remove(key);
+        body["policies"] = new JsonArray(policyIds
+            .Select((id, i) => (JsonNode)new JsonObject { ["id"] = id, ["precedence"] = i + 1 }).ToArray());
+        return body;
+    }
+
+    /// <summary>把政策加到應用程式（保留其他地點的政策）。已經有了就不動，回傳是否有變更。</summary>
+    public async Task<bool> AttachPolicyAsync(string accountId, string appId, string policyId)
+    {
+        var ids = await GetAppPolicyIdsAsync(accountId, appId);
+        if (ids.Contains(policyId)) return false;
+        ids.Add(policyId);
+        await SetAppPoliciesAsync(accountId, appId, ids);
+        return true;
+    }
+
+    /// <summary>
+    /// 從應用程式移除政策，回傳剩下的政策數。
+    /// 移除後會變成沒有任何政策時不更新（由呼叫端決定要不要刪除整個應用程式）。
+    /// </summary>
+    public async Task<int> DetachPolicyAsync(string accountId, string appId, string policyId)
+    {
+        List<string> ids;
+        try { ids = await GetAppPolicyIdsAsync(accountId, appId); }
+        catch (CloudflareApiException ex) when (ex.IsNotFound) { return 0; }
+        if (!ids.Remove(policyId)) return ids.Count;
+        if (ids.Count > 0) await SetAppPoliciesAsync(accountId, appId, ids);
+        return ids.Count;
+    }
+
     // ---------- App Launcher（使用者註冊 2FA 裝置的入口） ----------
 
     static object LauncherAppBody(string policyId) => new
@@ -344,8 +400,6 @@ sealed partial class CloudflareClient
     public async Task<string> CreateAppLauncherAsync(string accountId, string policyId)
         => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", LauncherAppBody(policyId)))!["id"]!.GetValue<string>();
 
-    public async Task UpdateAppLauncherAsync(string accountId, string appId, string policyId)
-        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", LauncherAppBody(policyId));
 
     public async Task<string> CreatePolicyAsync(string accountId, string name, RdpConfig rdp)
         => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/policies", PolicyBody(name, rdp)))!["id"]!.GetValue<string>();

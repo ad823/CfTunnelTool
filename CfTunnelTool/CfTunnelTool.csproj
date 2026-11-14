@@ -10,7 +10,13 @@
     <RootNamespace>CfTunnelTool</RootNamespace>
     <Product>CfTunnelTool</Product>
     <AssemblyTitle>CfTunnelTool</AssemblyTitle>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
+
+    <!-- 發行商資訊：顯示在檔案內容、工作管理員與「設定 → 應用程式」 -->
+    <Company>鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.</Company>
+    <Authors>HONGSEN Intelligent Technology Co.,Ltd.</Authors>
+    <Copyright>Copyright © 2026 鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.</Copyright>
+    <Description>CfTunnelTool － 透過 Cloudflare Tunnel 讓外網連到網站、API 與遠端桌面</Description>
 
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>

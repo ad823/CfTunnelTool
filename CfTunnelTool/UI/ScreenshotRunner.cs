@@ -105,6 +105,12 @@ static class ScreenshotRunner
         Capture(client, Path.Combine(dir, "client.png"));
         client.Close();
 
+        var host = new HostSetupForm { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
+        host.Show();
+        Pump(3000);
+        Capture(host, Path.Combine(dir, "host-setup.png"));
+        host.Close();
+
         var edit = new MachineEditForm(demoClient.Machines[0]) { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
         edit.Show();
         Pump(500);

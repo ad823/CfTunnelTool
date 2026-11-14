@@ -188,6 +188,29 @@ static class SelfTest
         Check("2FA：間隔文字", TwoFactorStatus.Compute("24h", now, now).IntervalText == "每 24 小時驗證一次"
                             && TwoFactorStatus.Compute("30m", now, now).IntervalText == "每 30 分鐘驗證一次");
 
+        // ---- v1.5.0：密碼規則、發行商、多地點共用、交還畫面 ----
+        Check("密碼：8 個字元以上即可（不限字元種類）", UI.HostAccountPanel.ValidatePassword("abcdefgh", "abcdefgh") is null);
+        Check("密碼：少於 8 個字元 → 錯誤", UI.HostAccountPanel.ValidatePassword("abc1234", "abc1234") is not null);
+        Check("密碼：兩次不一樣 → 錯誤", UI.HostAccountPanel.ValidatePassword("abcdefgh", "abcdefgi") is not null);
+        Check("發行商：鴻森智能科技", SelfInstaller.Publisher.Contains("鴻森智能科技") && SelfInstaller.Publisher.Contains("HONGSEN"), SelfInstaller.Publisher);
+        Check("交還畫面：可判斷是否為遠端工作階段", true, ConsoleSession.IsRemoteSession ? "目前是遠端工作階段" : "目前是本機工作階段");
+
+        var oldOwned = JsonSerializer.Deserialize<RdpConfig>("{\"LauncherAppId\":\"la\",\"WarpEnrollAppId\":\"wa\"}")!;
+        Check("多地點：舊設定檔的 App Launcher 視為自己建立", oldOwned.LauncherOwned && oldOwned.WarpEnrollOwned);
+        var sharedPrev = new RdpConfig { LauncherAppId = "shared", LauncherOwned = false, WarpEnrollAppId = "wshared", WarpEnrollOwned = false };
+        var sharedCur = new RdpConfig();
+        RdpDeployer.CarryOverIds(sharedCur, sharedPrev);
+        Check("多地點：CarryOverIds 帶入共用狀態", sharedCur.LauncherAppId == "shared" && !sharedCur.LauncherOwned
+                                              && sharedCur.WarpEnrollAppId == "wshared" && !sharedCur.WarpEnrollOwned);
+        var appJson2 = System.Text.Json.Nodes.JsonNode.Parse(
+            "{\"id\":\"a1\",\"aud\":\"x\",\"created_at\":\"t\",\"type\":\"app_launcher\",\"domain\":\"team.cloudflareaccess.com\"," +
+            "\"landing_page_design\":{\"title\":\"Hi\"},\"scim_config\":null,\"policies\":[{\"id\":\"p1\",\"precedence\":1}]}")!.AsObject();
+        var withPol = CloudflareClient.WithPolicies(appJson2, ["p1", "p2"]).ToJsonString();
+        Check("多地點：只換政策，保留其他設定、移除唯讀欄位與空值",
+            withPol.Contains("\"landing_page_design\"") && withPol.Contains("\"type\":\"app_launcher\"") &&
+            !withPol.Contains("\"id\":\"a1\"") && !withPol.Contains("\"aud\"") && !withPol.Contains("scim_config") &&
+            withPol.Contains("{\"id\":\"p1\",\"precedence\":1},{\"id\":\"p2\",\"precedence\":2}"), withPol);
+
         // ---- .rdp 檔 ----
         Check(".rdp：有預設帳號時寫入 username",
             WarpClient.RdpFileContent(new ClientMachine { Ip = "1.2.3.4", UserName = @"PC\u" }).Contains(@"username:s:PC\u"));

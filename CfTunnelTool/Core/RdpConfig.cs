@@ -66,6 +66,15 @@ sealed partial class RdpConfig
     public string? LauncherAppId { get; set; }
     public string? LauncherPolicyId { get; set; }
 
+    /// <summary>
+    /// App Launcher 是否由這台電腦建立。false 代表是其他地點建立、這裡只是把政策加進去（多地點共用）。
+    /// 舊版設定檔沒有這個欄位時為 true（舊版只會記錄自己建立的）。
+    /// </summary>
+    public bool LauncherOwned { get; set; } = true;
+
+    /// <summary>WARP 註冊權限應用程式是否由這台電腦建立（意義同 <see cref="LauncherOwned"/>）。</summary>
+    public bool WarpEnrollOwned { get; set; } = true;
+
     /// <summary>WARP 模式：私有網路應用程式（連線前 2FA）與其政策、裝置註冊權限應用程式（只記錄本工具建立的）。</summary>
     public string? WarpAppId { get; set; }
     public string? WarpPolicyId { get; set; }
