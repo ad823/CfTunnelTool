@@ -211,6 +211,34 @@ static class SelfTest
             !withPol.Contains("\"id\":\"a1\"") && !withPol.Contains("\"aud\"") && !withPol.Contains("scim_config") &&
             withPol.Contains("{\"id\":\"p1\",\"precedence\":1},{\"id\":\"p2\",\"precedence\":2}"), withPol);
 
+        // ---- v1.6.0：獨立虛擬網路（不同地點相同 IP） ----
+        var siteA = Good();
+        siteA.AuthDomain = "myteam.cloudflareaccess.com";
+        siteA.UseOwnVnet = true; siteA.VnetId = "vnetA"; siteA.VnetName = "factory-a"; siteA.SiteName = "factory-a";
+        var siteB = Good();
+        siteB.AuthDomain = "myteam.cloudflareaccess.com";
+        siteB.UseOwnVnet = true; siteB.VnetId = "vnetB"; siteB.VnetName = "factory-b"; siteB.SiteName = "factory-b";
+        Check("虛擬網路：獨立時目標名稱加上地點", siteA.TargetName(siteA.Machines[0]) == "factory-a-pc1");
+        var defaultSite = Good(); defaultSite.SiteName = "x";
+        Check("虛擬網路：預設時目標名稱不變（相容舊版）", defaultSite.TargetName(defaultSite.Machines[0]) == "pc1");
+        var appA = JsonSerializer.Serialize(CloudflareClient.RdpAppBody("a", siteA, "P"));
+        Check("虛擬網路：瀏覽器應用程式用地點化的目標名稱", appA.Contains("\"hostname\":[\"factory-a-pc1\"]"));
+
+        var codeA = ClientConfig.TryParse(ClientConfig.FromRdp(siteA).ToCode())!;
+        var codeB = ClientConfig.TryParse(ClientConfig.FromRdp(siteB).ToCode())!;
+        Check("虛擬網路：連線代碼帶地點", codeA.Machines[0].VnetId == "vnetA" && codeA.Machines[0].VnetName == "factory-a");
+        var mergedSites = codeA.Merge(codeB, out var addB, out _);
+        Check("虛擬網路：不同地點的相同 IP 合併後是不同電腦", mergedSites && addB == 2 && codeA.Machines.Count == 4,
+            $"added={addB} total={codeA.Machines.Count}");
+        Check("虛擬網路：Sites() 列出兩個地點", codeA.Sites().Count == 2);
+        var legacy = ClientConfig.TryParse(oldCode)!; // 舊版代碼沒有地點
+        var legacyMerge = legacy.Merge(new ClientConfig
+        {
+            Team = "myteam",
+            Machines = [new ClientMachine { Name = "pc1", Ip = "192.168.1.10", Port = 3389, VnetId = "vdef", VnetName = null }],
+        }, out var addL, out var updL);
+        Check("虛擬網路：舊版清單匯入新代碼時補上地點、不重複", legacyMerge && addL == 0 && updL == 1 && legacy.Machines[0].VnetId == "vdef");
+
         // ---- .rdp 檔 ----
         Check(".rdp：有預設帳號時寫入 username",
             WarpClient.RdpFileContent(new ClientMachine { Ip = "1.2.3.4", UserName = @"PC\u" }).Contains(@"username:s:PC\u"));

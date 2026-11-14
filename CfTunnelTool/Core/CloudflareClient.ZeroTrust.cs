@@ -116,6 +116,20 @@ sealed partial class CloudflareClient
         return vnet["id"]!.GetValue<string>();
     }
 
+    /// <summary>用名稱找虛擬網路，找不到回傳 null。</summary>
+    public async Task<string?> FindVirtualNetworkIdAsync(string accountId, string name)
+    {
+        var list = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/teamnet/virtual_networks?is_deleted=false&name={Q(name)}");
+        return list?.AsArray().FirstOrDefault(v => v?["name"]?.GetValue<string>() == name)?["id"]?.GetValue<string>();
+    }
+
+    public async Task<string> CreateVirtualNetworkAsync(string accountId, string name, string comment)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/teamnet/virtual_networks",
+            new { name, comment, is_default_network = false }))!["id"]!.GetValue<string>();
+
+    public Task<bool> DeleteVirtualNetworkAsync(string accountId, string vnetId)
+        => TryDeleteAsync($"accounts/{accountId}/teamnet/virtual_networks/{vnetId}");
+
     static TeamnetRoute ParseRoute(JsonNode r) => new(
         r["id"]!.GetValue<string>(),
         r["network"]!.GetValue<string>(),
@@ -427,7 +441,7 @@ sealed partial class CloudflareClient
             {
                 port = g.Key,
                 protocol = "RDP",
-                target_attributes = new Dictionary<string, string[]> { ["hostname"] = g.Select(m => m.Name).ToArray() },
+                target_attributes = new Dictionary<string, string[]> { ["hostname"] = g.Select(rdp.TargetName).ToArray() },
             })
             .ToList();
 

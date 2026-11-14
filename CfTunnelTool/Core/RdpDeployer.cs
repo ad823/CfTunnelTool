@@ -95,15 +95,27 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
         // ---- 3. 私有網路路由 ----
         log.Step("設定私有網路路由");
-        var vnetId = await WithPermission(PermZeroTrust, () => cf.GetDefaultVirtualNetworkIdAsync(acc));
+        var vnetId = await WithPermission(PermZeroTrust, () => EnsureVirtualNetworkAsync(acc, rdp, config.TunnelName, previous));
+
+        // 虛擬網路變了（例如改成這個地點獨立使用）：舊虛擬網路中的路由要刪掉，再到新的虛擬網路建立
+        if (previous?.VnetId is { } oldVnet && oldVnet != vnetId)
+        {
+            foreach (var old in previous.Machines.Where(o => o.RouteId is not null))
+                await cf.DeleteRouteAsync(acc, old.RouteId!);
+            foreach (var m in rdp.Machines) m.RouteId = null;
+            log.Ok("虛擬網路已變更，已移除舊虛擬網路中的路由");
+            if (previous is { UseOwnVnet: true, VnetOwned: true } && await cf.DeleteVirtualNetworkAsync(acc, oldVnet))
+                log.Ok("已刪除之前建立的虛擬網路");
+        }
         rdp.VnetId = vnetId;
+
         foreach (var m in rdp.Machines)
             await WithPermission(PermZeroTrust, () => EnsureRouteAsync(acc, m, tunnelId, vnetId, config.TunnelName));
 
         // ---- 4. 基礎架構目標 ----
         log.Step("設定遠端桌面目標");
         foreach (var m in rdp.Machines)
-            await WithPermission(PermZeroTrust, () => EnsureTargetAsync(acc, m, vnetId));
+            await WithPermission(PermZeroTrust, () => EnsureTargetAsync(acc, rdp, m, vnetId));
 
         // 已從清單移除的電腦：刪掉它們的目標與路由
         if (previous is not null)
@@ -477,28 +489,66 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             log.Ok($"{m.Name}：路由 {network} 已正確");
             return;
         }
-        if (!confirm($"{network}（{m.Name}）目前已經透過「另一個 Tunnel」開放，可能是其他電腦在使用。\n\n要改成透過這台電腦中繼嗎？"))
-            throw new OperationCanceledException($"已取消部署：{network} 由其他 Tunnel 使用中。");
+        if (!confirm($"{network}（{m.Name}）目前已經透過「另一個 Tunnel」開放，可能是其他地點的電腦在使用。\n\n" +
+                     "• 如果是同一台電腦要改由這裡中繼：選「是」\n" +
+                     "• 如果是「不同地點、剛好 IP 一樣」的電腦：選「否」，回到遠端桌面步驟勾選「這個地點使用獨立的虛擬網路」\n\n" +
+                     "要改成透過這台電腦中繼嗎？"))
+            throw new OperationCanceledException(
+                $"已取消部署：{network} 由其他 Tunnel 使用中。如果是不同地點的相同 IP，請在遠端桌面步驟勾選「這個地點使用獨立的虛擬網路」。");
         await cf.UpdateRouteTunnelAsync(acc, route.Id, network, tunnelId, vnetId, comment);
         m.RouteId = route.Id;
         log.Ok($"{m.Name}：路由 {network} 已改由這台電腦中繼");
     }
 
-    async Task EnsureTargetAsync(string acc, RdpMachine m, string vnetId)
+    async Task EnsureTargetAsync(string acc, RdpConfig rdp, RdpMachine m, string vnetId)
     {
+        var name = rdp.TargetName(m);
         var target = m.TargetId is not null ? await cf.GetTargetAsync(acc, m.TargetId) : null;
-        target ??= await cf.FindTargetByHostnameAsync(acc, m.Name);
+        target ??= await cf.FindTargetByHostnameAsync(acc, name);
         if (target is null)
         {
-            m.TargetId = await cf.CreateTargetAsync(acc, m.Name, m.Ip, vnetId);
+            m.TargetId = await cf.CreateTargetAsync(acc, name, m.Ip, vnetId);
             log.Ok($"{m.Name}：已建立遠端桌面目標");
         }
         else
         {
             m.TargetId = target.Id;
-            await cf.UpdateTargetAsync(acc, target.Id, m.Name, m.Ip, vnetId);
+            await cf.UpdateTargetAsync(acc, target.Id, name, m.Ip, vnetId);
             log.Ok($"{m.Name}：遠端桌面目標已更新（{m.Ip}）");
         }
+    }
+
+    /// <summary>
+    /// 取得這個地點要用的虛擬網路：
+    /// 獨立虛擬網路 → 找或建立「cft-Tunnel名稱」；否則用帳號的預設虛擬網路。
+    /// </summary>
+    async Task<string> EnsureVirtualNetworkAsync(string acc, RdpConfig rdp, string tunnelName, RdpConfig? previous)
+    {
+        if (!rdp.UseOwnVnet)
+        {
+            rdp.VnetName = null;
+            rdp.SiteName = null;
+            rdp.VnetOwned = false;
+            return await cf.GetDefaultVirtualNetworkIdAsync(acc);
+        }
+
+        var name = $"cft-{tunnelName}";
+        rdp.VnetName = tunnelName;
+        rdp.SiteName = tunnelName;
+        var id = await cf.FindVirtualNetworkIdAsync(acc, name);
+        if (id is null)
+        {
+            id = await cf.CreateVirtualNetworkAsync(acc, name, $"CfTunnelTool：{tunnelName} 地點");
+            rdp.VnetOwned = true;
+            log.Ok($"已建立這個地點的虛擬網路「{name}」（不同地點的相同 IP 不會衝突）");
+        }
+        else
+        {
+            // 名稱是本工具的命名規則；之前有記錄就沿用當時的擁有狀態
+            rdp.VnetOwned = previous?.VnetId == id ? previous.VnetOwned : true;
+            log.Ok($"使用這個地點的虛擬網路「{name}」");
+        }
+        return id;
     }
 
     async Task<bool> EnsureRdpDnsAsync(string zoneId, string hostname)
@@ -576,6 +626,22 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         if (!string.IsNullOrEmpty(rdp.Hostname))
             await DeleteRdpDnsAsync(zone.ZoneId, rdp.Hostname);
         rdp.AppId = rdp.PolicyId = null;
+
+        // 這個地點自己建立的虛擬網路（路由都已刪除後才能刪）
+        if (rdp is { UseOwnVnet: true, VnetOwned: true, VnetId: { } vnet })
+        {
+            try
+            {
+                if (await cf.DeleteVirtualNetworkAsync(acc, vnet)) log.Ok("已刪除這個地點的虛擬網路");
+            }
+            catch (CloudflareApiException ex)
+            {
+                log.Warn("虛擬網路暫時無法刪除（可能還有其他路由在使用），可以之後到 Cloudflare 後台刪除。");
+                log.Info(ex.Message);
+            }
+            rdp.VnetId = null;
+            rdp.VnetOwned = false;
+        }
     }
 
     // ================= 狀態 =================

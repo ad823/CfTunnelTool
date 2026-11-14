@@ -8,7 +8,7 @@ namespace CfTunnelTool.UI;
 /// </summary>
 sealed class ClientForm : Form
 {
-    const int ColName = 0, ColAddress = 1, ColUser = 2, ColLast = 3, ColStatus = 4;
+    const int ColName = 0, ColSite = 1, ColAddress = 2, ColUser = 3, ColLast = 4, ColStatus = 5;
 
     ClientConfig? _config;
     readonly bool _demo;
@@ -102,6 +102,7 @@ sealed class ClientForm : Form
             Margin = new Padding(0, 0, 0, 6),
         };
         _list.Columns.Add("名稱");
+        _list.Columns.Add("地點");
         _list.Columns.Add("位址");
         _list.Columns.Add("預設帳號");
         _list.Columns.Add("上次連線");
@@ -159,7 +160,8 @@ sealed class ClientForm : Form
             Text = "•  連線時如果右下角跳出「Authentication required」通知，點它完成 2FA；程式也會自動提示重新驗證\n" +
                    "•  2FA 到期後，已經連上的遠端桌面不會中斷，只有新的連線需要重新驗證\n" +
                    "•  遠端桌面要求帳密時，輸入公司那台電腦的 Windows 帳號密碼；「預設帳號」只預先填好帳號名稱\n" +
-                   "•  不需要連公司時可以按「中斷連線」，平常上網就不會經過公司的 Cloudflare",
+                   "•  不需要連公司時可以按「中斷連線」，平常上網就不會經過公司的 Cloudflare\n" +
+                   "•  有多個地點時，WARP 同一時間只能連一個地點；連到另一個地點時會自動切換，原本地點的遠端桌面會中斷",
             AutoSize = true,
             BackColor = Theme.HelpBack,
             Padding = new Padding(14, 8, 14, 8),
@@ -191,7 +193,7 @@ sealed class ClientForm : Form
     {
         var w = _list.ClientSize.Width;
         if (w <= 0) return;
-        int[] pct = [24, 20, 20, 16];
+        int[] pct = [20, 14, 18, 16, 14];
         for (int i = 0; i < pct.Length; i++) _list.Columns[i].Width = w * pct[i] / 100;
         _list.Columns[ColStatus].Width = w - pct.Sum(p => w * p / 100) - 2;
     }
@@ -204,6 +206,7 @@ sealed class ClientForm : Form
         foreach (var m in _config?.Machines ?? [])
         {
             var item = new ListViewItem(m.Name) { Tag = m, UseItemStyleForSubItems = false };
+            item.SubItems.Add(m.VnetId is null ? "—" : m.VnetName ?? "預設");
             item.SubItems.Add($"{m.Ip}:{m.Port}");
             item.SubItems.Add(string.IsNullOrEmpty(m.UserName) ? "—" : m.UserName);
             item.SubItems.Add(m.LastConnectedAt is { } t ? t.ToString("M/d HH:mm") : "—");
@@ -242,7 +245,7 @@ sealed class ClientForm : Form
             _importPanel.Visible = true;
             return;
         }
-        using var dlg = new MachineEditForm(null);
+        using var dlg = new MachineEditForm(null, _config.Sites());
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         _config.Machines.Add(dlg.Result);
         Save();
@@ -253,7 +256,7 @@ sealed class ClientForm : Form
     void EditSelected()
     {
         if (SelectedMachine() is not { } m || _config is null) return;
-        using var dlg = new MachineEditForm(m);
+        using var dlg = new MachineEditForm(m, _config.Sites());
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var hadShortcut = File.Exists(WarpClient.RdpFilePath(m));
         if (hadShortcut) WarpClient.DeleteRdpShortcut(m);
@@ -422,6 +425,8 @@ sealed class ClientForm : Form
             }
 
             _log.Step($"連線到 {m.Name}（{m.Ip}:{m.Port}）");
+            if (!await EnsureSiteAsync(m)) return;
+
             SetItemStatus(m, "測試中…", Theme.Muted);
             if (await RdpHost.TestTcpAsync(m.Ip, m.Port))
             {
@@ -465,6 +470,35 @@ sealed class ClientForm : Form
         }
     }
 
+    /// <summary>
+    /// 確保 WARP 在這台電腦所在的虛擬網路（地點）。無法自動切換時，引導使用者到 WARP 設定手動選擇。
+    /// </summary>
+    async Task<bool> EnsureSiteAsync(ClientMachine m)
+    {
+        if (_config is null || m.VnetId is null || _config.CurrentVnetId == m.VnetId) return true;
+
+        var siteName = m.VnetName is null ? "預設" : $"cft-{m.VnetName}";
+        _log.Step($"切換到地點「{m.VnetName ?? "預設"}」");
+        if (await Task.Run(() => WarpClient.SwitchVirtualNetwork(m.VnetId, _log)))
+        {
+            _config.CurrentVnetId = m.VnetId;
+            Save();
+            await Task.Delay(3000); // 切換後 WARP 會重新連線
+            await EnsureWarpConnectedAsync();
+            return true;
+        }
+
+        var answer = MessageBox.Show(this,
+            $"無法自動切換到「{m.Name}」所在的地點。\n\n" +
+            $"請開啟 WARP 視窗 → 設定 → 虛擬網路（Virtual networks），選擇「{siteName}」，再按「確定」繼續連線。",
+            "切換地點", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
+        WarpClient.OpenGui();
+        if (answer != DialogResult.OK) return false;
+        _config.CurrentVnetId = m.VnetId;
+        Save();
+        return true;
+    }
+
     async Task TestAllAsync()
     {
         if (_config is null || _config.Machines.Count == 0) return;
@@ -477,8 +511,14 @@ sealed class ClientForm : Form
                 _log.Error("WARP 無法連線，無法測試。");
                 return;
             }
-            foreach (var m in _config.Machines) SetItemStatus(m, "測試中…", Theme.Muted);
-            var results = await Task.WhenAll(_config.Machines.Select(async m => (m, ok: await RdpHost.TestTcpAsync(m.Ip, m.Port))));
+            // WARP 同一時間只在一個虛擬網路：只測試目前地點的電腦，其他地點標示「切換後才能測試」
+            var current = _config.CurrentVnetId;
+            bool InCurrentSite(ClientMachine m) => m.VnetId is null || current is null || m.VnetId == current;
+            var testable = _config.Machines.Where(InCurrentSite).ToList();
+            foreach (var m in _config.Machines.Except(testable)) SetItemStatus(m, "其他地點（連線時自動切換）", Theme.Muted);
+            foreach (var m in testable) SetItemStatus(m, "測試中…", Theme.Muted);
+
+            var results = await Task.WhenAll(testable.Select(async m => (m, ok: await RdpHost.TestTcpAsync(m.Ip, m.Port))));
             foreach (var (m, ok) in results)
                 SetItemStatus(m, ok ? "✓ 可以連線" : "✗ 連不到", ok ? Theme.Success : Theme.Danger);
             if (results.Any(r => r.ok))
@@ -487,7 +527,7 @@ sealed class ClientForm : Form
                 Save();
                 RefreshMfaStatus();
             }
-            else
+            else if (results.Length > 0)
             {
                 _log.Warn("全部連不到：最可能是 2FA 需要重新驗證，請按「立即重新驗證」。");
             }

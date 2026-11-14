@@ -10,7 +10,7 @@ sealed partial class RdpStep : StepPage
 
     readonly WizardState _state;
     readonly CheckBox _enable;
-    readonly CheckBox _modeBrowser, _modeWarp;
+    readonly CheckBox _modeBrowser, _modeWarp, _ownVnet;
     readonly List<Control> _settings = [];
     readonly TextBox _sub;
     readonly Label _domainSuffix;
@@ -52,6 +52,11 @@ sealed partial class RdpStep : StepPage
         _modeBrowser = Check("瀏覽器（免安裝，但畫面較慢；適合偶爾使用或外部人員）", true);
         S(Add(_modeWarp, stretch: false));
         S(Add(_modeBrowser, stretch: false));
+        _ownVnet = Check("這個地點使用獨立的虛擬網路（有多個地點、而且內網 IP 可能重複時勾選）", false);
+        _ownVnet.Margin = new Padding(0, 10, 18, 0);
+        S(Add(_ownVnet, stretch: false));
+        S(AddText("勾選後，不同地點的相同 IP（例如兩個廠區都有 192.168.1.10）不會衝突。WARP 使用者同一時間只能連一個地點，CfTunnelTool 使用者端會在連線時自動切換。",
+            Theme.Small, Theme.Muted, top: 0, bottom: 4));
 
         // ---- 網址 ----
         S(AddText("瀏覽器連線網址（只有瀏覽器方式會用到）：", Theme.Bold, top: 10, bottom: 2));
@@ -305,6 +310,7 @@ sealed partial class RdpStep : StepPage
             {
                 _modeBrowser.Checked = rdp.BrowserEnabled;
                 _modeWarp.Checked = rdp.WarpEnabled;
+                _ownVnet.Checked = rdp.UseOwnVnet;
                 _sub.Text = rdp.Hostname == _state.Domain ? "" :
                     rdp.Hostname.EndsWith("." + _state.Domain) ? rdp.Hostname[..^(_state.Domain.Length + 1)] : "rdp";
                 foreach (var m in rdp.Machines) AddMachineRow(m.Name, m.Ip, m.Port);
@@ -336,6 +342,7 @@ sealed partial class RdpStep : StepPage
             Enabled = _enable.Checked,
             BrowserEnabled = _modeBrowser.Checked,
             WarpEnabled = _modeWarp.Checked,
+            UseOwnVnet = _ownVnet.Checked,
             Hostname = sub is "" or "@" ? _state.Domain : $"{sub}.{_state.Domain}",
             Machines = ReadMachines(),
             AllowedEmails = _emails.Lines.Select(l => l.Trim()).Where(l => l.Length > 0).ToList(),

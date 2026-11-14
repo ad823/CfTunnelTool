@@ -93,7 +93,12 @@ static class ScreenshotRunner
         demoClient.LastVerifiedAt = DateTime.Now.AddHours(-2);
         demoClient.Machines[0].UserName = @"OFFICE-PC\alice";
         demoClient.Machines[0].LastConnectedAt = DateTime.Now.AddHours(-2);
-        demoClient.Machines.Add(new ClientMachine { Name = "meeting-room", Ip = "192.168.10.45", Port = 3389 });
+        // 另一個地點（獨立虛擬網路），IP 與第一個地點相同也不衝突
+        demoClient.Machines.Add(new ClientMachine
+        {
+            Name = "factory-pc", Ip = "192.168.10.20", Port = 3389,
+            VnetId = "b2c3d4e5-0000-4000-8000-000000000000", VnetName = "factory-b",
+        });
         var client = new ClientForm(demoClient, demo: true)
         {
             StartPosition = FormStartPosition.Manual,

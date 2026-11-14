@@ -57,7 +57,7 @@ sealed class DeployStep : StepPage
             _state.Routes,
             Rdp = rdp is null ? null : new
             {
-                rdp.Enabled, rdp.Hostname, rdp.AllowedEmails, rdp.MfaMethods, rdp.MfaSessionDuration,
+                rdp.Enabled, rdp.BrowserEnabled, rdp.WarpEnabled, rdp.UseOwnVnet, rdp.Hostname, rdp.AllowedEmails, rdp.MfaMethods, rdp.MfaSessionDuration,
                 rdp.ClipboardText, rdp.FileUpload, rdp.FileDownload,
                 Machines = rdp.Machines.Select(m => new { m.Name, m.Ip, m.Port }),
             },
@@ -78,7 +78,8 @@ sealed class DeployStep : StepPage
         }
         if (_state.Rdp is { Enabled: true } rdp)
         {
-            lines.Add($"遠端桌面：https://{rdp.Hostname}");
+            var modes = string.Join("＋", new[] { rdp.WarpEnabled ? "WARP" : null, rdp.BrowserEnabled ? $"瀏覽器 https://{rdp.Hostname}" : null }.Where(x => x is not null));
+            lines.Add($"遠端桌面：{modes}" + (rdp.UseOwnVnet ? $"（獨立虛擬網路 cft-{_state.TunnelName}）" : ""));
             lines.AddRange(rdp.Machines.Select(m => $"      {m.Name}  →  {m.Ip}:{m.Port}"));
             lines.Add($"允許登入：{string.Join("、", rdp.AllowedEmails)}");
             lines.Add($"2FA：{string.Join("、", rdp.MfaMethods.Select(RdpDeployer.MfaMethodName))}（{RdpDeployer.SessionName(rdp.MfaSessionDuration)}）");

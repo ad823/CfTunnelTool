@@ -117,6 +117,24 @@ static class WarpClient
         if (IsInstalled) Cloudflared.Run(CliPath, "--accept-tos", "connect");
     }
 
+    /// <summary>
+    /// 把 WARP 切換到指定的虛擬網路（地點）。同一時間只能在一個虛擬網路，
+    /// 切換時連到其他地點的連線會中斷。回傳是否成功（舊版 WARP 沒有這個指令時回傳 false，
+    /// 由畫面引導使用者在 WARP 設定中手動選擇）。
+    /// </summary>
+    public static bool SwitchVirtualNetwork(string vnetId, ILog log)
+    {
+        if (!IsInstalled) return false;
+        var r = Cloudflared.Run(CliPath, "--accept-tos", "vnet", vnetId);
+        if (r.ExitCode == 0)
+        {
+            log.Ok("已切換到這個地點的虛擬網路");
+            return true;
+        }
+        log.Warn("無法自動切換虛擬網路：" + r.Output.Trim());
+        return false;
+    }
+
     /// <summary>中斷 WARP（之後一般上網不經過公司）。</summary>
     public static void Disconnect()
     {
@@ -233,7 +251,9 @@ static class WarpClient
 
     public static string RdpFilePath(ClientMachine m)
     {
-        var safe = string.Concat(m.Name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        // 有地點（獨立虛擬網路）時加在檔名後面，避免不同地點的同名電腦互相覆蓋
+        var label = m.VnetName is { Length: > 0 } site ? $"{m.Name}（{site}）" : m.Name;
+        var safe = string.Concat(label.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
         return Path.Combine(DesktopDir, $"遠端桌面 - {safe}.rdp");
     }
 

@@ -8,12 +8,15 @@ namespace CfTunnelTool.UI;
 sealed class MachineEditForm : Form
 {
     readonly TextBox _name, _ip, _port, _user;
+    readonly ComboBox? _site;
+    readonly List<(string? Id, string Name)> _sites;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public ClientMachine Result { get; private set; }
 
-    public MachineEditForm(ClientMachine? machine)
+    public MachineEditForm(ClientMachine? machine, List<(string? Id, string Name)>? sites = null)
     {
+        _sites = sites ?? [];
         Result = machine?.Clone() ?? new ClientMachine { Name = "", Ip = "192.168.", Port = 3389 };
 
         SuspendLayout();
@@ -45,6 +48,18 @@ sealed class MachineEditForm : Form
         }
 
         _name = Field("名稱：", Result.Name, 260);
+
+        // 有多個地點（虛擬網路）時，選擇這台電腦在哪個地點
+        if (_sites.Count > 0)
+        {
+            grid.Controls.Add(new Label { Text = "地點：", AutoSize = true, Margin = new Padding(0, 8, 12, 0) });
+            _site = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, Margin = new Padding(0, 4, 0, 4) };
+            foreach (var s in _sites) _site.Items.Add(s.Name);
+            var index = _sites.FindIndex(s => s.Id == Result.VnetId);
+            _site.SelectedIndex = index >= 0 ? index : 0;
+            grid.Controls.Add(_site);
+        }
+
         _ip = Field("內網 IP：", Result.Ip, 200, "公司那台電腦的區網 IP，例如 192.168.5.200");
         _port = Field("連接埠：", Result.Port.ToString(), 80);
         _user = Field("預設帳號：", Result.UserName ?? "", 260, "選填，例如 電腦名稱\\帳號；密碼仍然每次輸入");
@@ -95,6 +110,12 @@ sealed class MachineEditForm : Form
         Result.Ip = ip;
         Result.Port = int.Parse(_port.Text.Trim());
         Result.UserName = string.IsNullOrWhiteSpace(_user.Text) ? null : _user.Text.Trim();
+        if (_site is { SelectedIndex: >= 0 })
+        {
+            var site = _sites[_site.SelectedIndex];
+            Result.VnetId = site.Id;
+            Result.VnetName = site.Name;
+        }
         DialogResult = DialogResult.OK;
         Close();
     }

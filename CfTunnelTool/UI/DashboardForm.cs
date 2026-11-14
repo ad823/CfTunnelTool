@@ -144,7 +144,9 @@ sealed class DashboardForm : Form
 
     void LoadRoutes()
     {
-        _subtitle.Text = $"Tunnel：{_config.TunnelName}　　網域：{_config.Domain}　　設定檔：{AppStorage.Dir}";
+        _subtitle.Text = $"Tunnel：{_config.TunnelName}　　網域：{_config.Domain}" +
+            (_config.Rdp is { UseOwnVnet: true, VnetName: { } site } ? $"　　地點（虛擬網路）：cft-{site}" : "") +
+            $"　　設定檔：{AppStorage.Dir}";
         _routes.BeginUpdate();
         _routes.Items.Clear();
         foreach (var r in _config.Routes)

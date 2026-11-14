@@ -36,6 +36,25 @@ sealed partial class RdpConfig
     /// <summary>WARP ＋ Windows 遠端桌面連線（使用者需安裝 WARP，最流暢）。</summary>
     public bool WarpEnabled { get; set; }
 
+    /// <summary>
+    /// 這個地點使用獨立的虛擬網路（不同地點的內網 IP 可能重複時開啟）。
+    /// 關閉時使用帳號的預設虛擬網路（舊版行為）。
+    /// </summary>
+    public bool UseOwnVnet { get; set; }
+
+    /// <summary>虛擬網路名稱（顯示用，也就是「地點」）；部署時由程式記錄。</summary>
+    public string? VnetName { get; set; }
+
+    /// <summary>獨立虛擬網路是否由這台電腦建立（移除時才刪除）。</summary>
+    public bool VnetOwned { get; set; }
+
+    /// <summary>地點代號：使用獨立虛擬網路時加在遠端桌面目標名稱前面，避免和其他地點的同名電腦衝突。</summary>
+    public string? SiteName { get; set; }
+
+    /// <summary>Cloudflare 基礎架構目標的名稱。預設虛擬網路沿用電腦名稱（與舊版相容）。</summary>
+    public string TargetName(RdpMachine m) =>
+        UseOwnVnet && !string.IsNullOrEmpty(SiteName) ? $"{SiteName}-{m.Name}" : m.Name;
+
     public bool UsesBrowser => Enabled && BrowserEnabled;
     public bool UsesWarp => Enabled && WarpEnabled;
 
