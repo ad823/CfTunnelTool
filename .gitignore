@@ -1,0 +1,16 @@
+# 建置輸出
+bin/
+obj/
+publish/
+dist/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# 其他
+*.log
+Thumbs.db

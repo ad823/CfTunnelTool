@@ -1,0 +1,57 @@
+CfTunnelTool 使用說明
+====================
+
+讓外網透過你自己的網域（例如 https://api.yourdomain.com）連到這台電腦上的網站和 API。
+不需要固定 IP、不用設定路由器，Cloudflare 會自動提供 HTTPS。
+
+
+■ 系統需求
+  - Windows 10 / 11（64 位元）
+  - 一個已經加入 Cloudflare 的網域
+  - 這台電腦可以連上網際網路
+  - 不需要安裝 .NET（已包含在執行檔內）
+
+
+■ 執行方式
+  1. 把 CfTunnelTool.exe 解壓縮到任何位置（例如桌面）
+  2. 按兩下 CfTunnelTool.exe
+  3. 如果出現藍色視窗「Windows 已保護您的電腦」：
+       按「其他資訊」→「仍要執行」
+     （原因是這個程式沒有購買程式碼簽章，不是病毒）
+  4. Windows 詢問是否允許變更時，按「是」（需要系統管理員權限才能安裝連線服務）
+  5. 跟著畫面上的精靈完成 4 個步驟：
+       步驟 1  建立 Cloudflare API Token（畫面上有詳細教學與權限表）
+       步驟 2  選擇網域、設定這台電腦的 Tunnel 名稱
+       步驟 3  設定對外網址，例如 api → http://localhost:5000
+       步驟 4  按「開始部署」，等待約 1 分鐘
+
+  完成後，開始功能表與桌面會出現「CfTunnelTool」捷徑，之後用它開啟管理畫面。
+
+
+■ 驗證清單（建議第一次部署時逐項確認）
+  [ ] 用手機「行動網路」（不要連同一個 Wi-Fi）開啟設定的網址，可以看到網站 / API
+  [ ] 管理畫面顯示「本機連線服務：執行中」、「Cloudflare Tunnel：已連線」
+  [ ] 重新開機後，不開 CfTunnelTool，網址仍然可以連線
+  [ ] 管理畫面按「修改設定…」新增一個網址並重新部署，新網址可以連線
+  [ ] 測試完畢後按「移除全部設定…」，確認 Cloudflare 後台的 Tunnel 與 DNS 紀錄已刪除
+
+
+■ 遇到問題時請提供
+  1. 部署頁或管理畫面下方「記錄」視窗的截圖
+  2. 跳出的錯誤訊息截圖
+  3. 若 Tunnel 無法連線：開啟「事件檢視器 → Windows 記錄 → 應用程式」，
+     找來源為 cloudflared 的錯誤訊息
+
+
+■ 檔案位置
+  設定檔     C:\ProgramData\CfTunnelTool\config.json
+  Token      C:\ProgramData\CfTunnelTool\token.dat（Windows 加密）
+  管理程式   C:\Program Files\CfTunnelTool\CfTunnelTool.exe
+  連線程式   C:\Program Files\cloudflared\cloudflared.exe
+  Windows 服務名稱  Cloudflared
+
+
+■ 資安提醒
+  網站和 API 公開後，任何人都能連線，請務必做好登入驗證。
+  只給內部使用的網址，可以在 Cloudflare 後台 → Zero Trust → Access → Applications
+  加上登入保護（例如只允許公司 Email 登入）。

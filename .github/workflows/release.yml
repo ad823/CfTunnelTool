@@ -1,0 +1,91 @@
+name: Release
+
+# 推送 v* tag（例如 v1.0.1）時自動建置並發布 Release；
+# 也可以在 Actions 頁面手動執行，輸入版本號後會建立對應的 tag 與 Release。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本號，例如 1.0.1（會建立 tag v1.0.1）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: 決定版本號
+        id: ver
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $v = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION } else { $env:REF_NAME }
+          $v = $v.Trim().TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "版本號格式錯誤：'$v'（應為 1.2.3 的格式）" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "版本號：$v"
+
+      - name: 建置單一執行檔
+        shell: pwsh
+        run: >
+          dotnet publish CfTunnelTool/CfTunnelTool.csproj
+          -c Release -r win-x64 --self-contained
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=none
+          -p:Version=${{ steps.ver.outputs.version }}
+          -o publish
+
+      - name: 打包部署包
+        id: pkg
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $exe = Get-Item publish/CfTunnelTool.exe
+          Write-Host "執行檔版本：$($exe.VersionInfo.FileVersion)，大小：$([math]::Round($exe.Length / 1MB, 1)) MB"
+
+          $name = "CfTunnelTool-$env:VERSION-win-x64"
+          $stage = "dist/$name"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item $exe.FullName $stage
+          Copy-Item docs/使用說明.txt $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name.zip"
+
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path "dist/$name.zip.sha256" -Value "$hash  $name.zip" -Encoding ascii
+          Write-Host "SHA256：$hash"
+
+      - name: 發布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: CfTunnelTool v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          body: |
+            ## 安裝方式
+            1. 下載下方的 `CfTunnelTool-${{ steps.ver.outputs.version }}-win-x64.zip` 並解壓縮
+            2. 按兩下 `CfTunnelTool.exe`（不需要安裝 .NET）
+            3. 若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」
+            4. 跟著設定精靈完成 4 個步驟
+
+            詳細步驟與驗證清單請看 zip 內的 **使用說明.txt**。
+
+            檔案完整性：`.sha256` 檔內為 zip 的 SHA256，可用 PowerShell `Get-FileHash 檔名.zip` 比對。

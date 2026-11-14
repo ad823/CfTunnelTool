@@ -1,0 +1,9 @@
+* text=auto
+
+# Windows 批次檔與給使用者看的文字檔一律使用 CRLF（cmd 遇到 LF 會解析錯誤）
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.txt text eol=crlf
+
+*.ico binary
+*.png binary
