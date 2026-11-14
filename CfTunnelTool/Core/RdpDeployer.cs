@@ -67,8 +67,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
                       "請到 https://one.dash.cloudflare.com/ 依畫面完成啟用（設定 team 名稱、選擇 Free 方案），然後再按一次「重新部署」。");
         rdp.AuthDomain = org.AuthDomain;
         await WithPermission(PermOrg, () => cf.EnsureOneTimePinIdpAsync(acc));
-        await WithPermission(PermOrg, () => cf.EnsureOrganizationMfaAsync(acc, org, rdp.MfaMethods));
-        log.Ok($"Zero Trust 組織：{org.AuthDomain}（Email 驗證碼登入、2FA 已啟用）");
+        log.Ok($"Zero Trust 組織：{org.AuthDomain}，Email 驗證碼登入已啟用");
+        await EnsureOrganizationMfaAsync(acc, org, rdp);
 
         // ---- 2. 本機到各台電腦的連線檢查（只提醒） ----
         log.Step("檢查區網電腦的遠端桌面連接埠");
@@ -160,6 +160,41 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             log.Info($"使用者第一次登入前，先到這裡註冊 2FA 裝置：{enroll}");
 
         return dnsOk;
+    }
+
+    /// <summary>
+    /// 啟用組織層級的獨立 MFA。API 更新失敗時：
+    /// 組織已經允許部分方式 → 只用那些方式繼續部署並提醒；完全沒啟用 → 引導到後台手動啟用。
+    /// </summary>
+    async Task EnsureOrganizationMfaAsync(string acc, AccessOrganization org, RdpConfig rdp)
+    {
+        try
+        {
+            await WithPermission(PermOrg, () => cf.EnsureOrganizationMfaAsync(acc, org, rdp.MfaMethods));
+            log.Ok($"組織 2FA 已啟用：{string.Join("、", rdp.MfaMethods.Select(MfaMethodName))}");
+            return;
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            var enabled = CloudflareClient.GetOrganizationMfaMethods(org);
+            var usable = rdp.MfaMethods.Where(enabled.Contains).ToList();
+            if (usable.Count > 0)
+            {
+                log.Warn($"無法自動更新組織的 2FA 設定，改用組織已允許的方式：{string.Join("、", usable.Select(MfaMethodName))}");
+                log.Info(ex.Message);
+                rdp.MfaMethods = usable;
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "無法自動啟用 Zero Trust 組織的 2FA（獨立 MFA）。請先在後台手動啟用一次：\n" +
+                "  1. 開啟 https://one.dash.cloudflare.com/ → Access controls（存取控制）→ Access settings（存取設定）\n" +
+                "  2. 在「Allow multi-factor authentication (MFA)」勾選 Authenticator application" +
+                "（以及需要的 Security key、Biometrics）\n" +
+                "  3. 設定 Authentication duration（例如 24 小時），不要勾選「Apply global MFA settings by default」，按 Save\n" +
+                "  4. 回到這裡按「重新部署」\n\n" +
+                "Cloudflare 回應：" + ex.Message);
+        }
     }
 
     async Task EnsureRouteAsync(string acc, RdpMachine m, string tunnelId, string vnetId, string tunnelName)

@@ -69,7 +69,12 @@ sealed partial class CloudflareClient : IDisposable
         if (root?["success"]?.GetValue<bool>() != true)
         {
             var errorNodes = root?["errors"]?.AsArray().ToList() ?? [];
-            var errors = errorNodes.Select(e => $"[{e?["code"]}] {e?["message"]}").ToList();
+            // 有些錯誤會在 source.pointer 指出是哪個欄位有問題，一併顯示方便排查
+            var errors = errorNodes.Select(e =>
+            {
+                var pointer = e?["source"]?["pointer"]?.ToString();
+                return $"[{e?["code"]}] {e?["message"]}" + (string.IsNullOrEmpty(pointer) ? "" : $"（欄位：{pointer}）");
+            }).ToList();
             var codes = errorNodes.Select(e => e?["code"]?.ToString() ?? "").Where(c => c.Length > 0).ToHashSet();
             var hint = codes.Contains("6003") || codes.Contains("6111") || codes.Contains("9106")
                 ? "（API Token 無效，請確認複製的 Token 是否完整、是否已被撤銷）"

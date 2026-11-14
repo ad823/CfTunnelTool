@@ -46,27 +46,48 @@ sealed partial class CloudflareClient
         }
     }
 
+    /// <summary>組織目前允許的 MFA 方式（尚未啟用獨立 MFA 時為空）。</summary>
+    public static HashSet<string> GetOrganizationMfaMethods(AccessOrganization org) =>
+        (org.Raw["mfa_config"]?["allowed_authenticators"] as JsonArray)?
+            .Select(x => x?.ToString()).Where(x => !string.IsNullOrEmpty(x)).Select(x => x!).ToHashSet() ?? [];
+
     /// <summary>
     /// 確保組織已啟用獨立 MFA，且允許指定的驗證方式。
-    /// 依官方文件，PUT 時要把 GET 回來的所有欄位帶回去，避免覆寫其他設定。
+    /// 依官方文件，PUT 時要把 GET 回來的欄位帶回去，避免覆寫其他設定；
+    /// 但 GET 會回傳唯讀欄位與空值，原封不動送回會被拒絕（12062 invalid_org_config），所以先清掉。
+    /// 失敗時拋出的例外訊息會列出送出的欄位名稱（不含值），方便排查。
     /// </summary>
     public async Task EnsureOrganizationMfaAsync(string accountId, AccessOrganization org, IEnumerable<string> methods)
     {
+        var allowed = GetOrganizationMfaMethods(org);
+        var wanted = methods.ToList();
+        if (wanted.All(allowed.Contains) && org.Raw["mfa_config"] is not null) return; // 已經都允許
+
         var body = (JsonObject)org.Raw.DeepClone();
-        foreach (var readOnly in new[] { "created_at", "updated_at" }) body.Remove(readOnly);
+        string[] readOnly = ["created_at", "updated_at", "is_ui_read_only", "ui_read_only_toggle_reason"];
+        foreach (var key in readOnly) body.Remove(key);
+        foreach (var key in body.Where(p => p.Value is null || (p.Value is JsonValue v && v.ToString() == ""))
+                                .Select(p => p.Key).ToList())
+            body.Remove(key);
 
+        foreach (var m in wanted) allowed.Add(m);
         var mfa = body["mfa_config"] as JsonObject ?? new JsonObject();
-        var allowed = (mfa["allowed_authenticators"] as JsonArray)?
-            .Select(x => x?.GetValue<string>()).Where(x => x is not null).Select(x => x!).ToHashSet() ?? [];
-        var before = allowed.Count;
-        foreach (var m in methods) allowed.Add(m);
-        if (allowed.Count == before && body["mfa_config"] is not null) return; // 已經都允許
-
+        foreach (var key in mfa.Where(p => p.Value is null).Select(p => p.Key).ToList()) mfa.Remove(key);
         mfa["allowed_authenticators"] = new JsonArray(allowed.Select(a => (JsonNode)a).ToArray());
-        mfa["session_duration"] ??= "24h";
+        if (mfa["session_duration"] is null || mfa["session_duration"]!.ToString() == "") mfa["session_duration"] = "24h";
         body["mfa_config"] = mfa;
         body["mfa_required_for_all_apps"] ??= false;
-        await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/organizations", body);
+
+        try
+        {
+            await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/organizations", body);
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            throw new CloudflareApiException(
+                $"{ex.Message}\n（送出的組織欄位：{string.Join(", ", body.Select(p => p.Key))}；mfa_config：{string.Join(", ", mfa.Select(p => p.Key))}）",
+                ex.StatusCode, ex.Codes);
+        }
     }
 
     // ---------- 登入方式（Identity Provider） ----------
