@@ -87,6 +87,7 @@ static class SelfInstaller
     {
         foreach (var lnk in new[] { StartMenuShortcut, DesktopShortcut, ReturnConsoleShortcut })
             if (File.Exists(lnk)) File.Delete(lnk);
+        Logs.CollectorSchedule.Disable(); // 移除每小時收集紀錄的排程
         Registry.LocalMachine.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
 
         if (!Directory.Exists(InstallDir)) return;

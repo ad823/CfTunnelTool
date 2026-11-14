@@ -10,7 +10,7 @@
     <RootNamespace>CfTunnelTool</RootNamespace>
     <Product>CfTunnelTool</Product>
     <AssemblyTitle>CfTunnelTool</AssemblyTitle>
-    <Version>1.6.1</Version>
+    <Version>1.7.0</Version>
 
     <!-- 發行商資訊：顯示在檔案內容、工作管理員與「設定 → 應用程式」 -->
     <Company>鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.</Company>
@@ -34,6 +34,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Diagnostics.EventLog" Version="9.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.0" />
   </ItemGroup>

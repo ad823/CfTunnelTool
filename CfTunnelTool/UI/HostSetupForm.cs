@@ -54,6 +54,18 @@ sealed class HostSetupForm : Form
             Margin = new Padding(0, 14, 0, 8),
             Anchor = AnchorStyles.Left | AnchorStyles.Right,
         });
+
+        // ---- 遠端桌面使用紀錄 ----
+        stack.Controls.Add(Lbl("遠端桌面使用紀錄：", Theme.Bold, Theme.Text, 2));
+        stack.Controls.Add(Lbl("記錄誰在什麼時候遠端連進這台電腦、使用多久、登入失敗等。啟用後每小時自動收集（Windows 排程），" +
+                               "紀錄存在這台電腦的 C:\\ProgramData\\CfTunnelTool\\logs。", Theme.Small, Theme.Muted, 4));
+        var logs = Theme.SecondaryButton("查看與設定使用紀錄…");
+        logs.Click += (_, _) =>
+        {
+            using var f = new LogsForm(LogsMode.Host);
+            f.ShowDialog(this);
+        };
+        stack.Controls.Add(logs);
         scroller.Controls.Add(stack);
 
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 64, BackColor = Theme.Surface };

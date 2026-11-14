@@ -12,6 +12,7 @@ static class SelfTest
 {
     public static void Run(string outputPath)
     {
+        LogBox.PersistToFile = false; // 自我測試不寫入真正的操作紀錄
         var sb = new StringBuilder();
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail = "")
@@ -245,6 +246,83 @@ static class SelfTest
             Machines = [new ClientMachine { Name = "pc1", Ip = "192.168.1.10", Port = 3389, VnetId = "vdef", VnetName = null }],
         }, out var addL, out var updL);
         Check("虛擬網路：舊版清單匯入新代碼時補上地點、不重複", legacyMerge && addL == 0 && updL == 1 && legacy.Machines[0].VnetId == "vdef");
+
+        // ---- v1.7.0：紀錄（全部寫在暫存資料夾，不碰真正的紀錄） ----
+        var realRoot = Core.Logs.LogStore.Root;
+        var tempRoot = Path.Combine(Path.GetTempPath(), "cftunnel-selftest-logs-" + Guid.NewGuid().ToString("N"));
+        Core.Logs.LogStore.Root = tempRoot;
+        try
+        {
+            var t0 = new DateTime(2026, 10, 31, 23, 50, 0);
+            Core.Logs.LogStore.Append(Core.Logs.LogKinds.Operation, new[]
+            {
+                new Core.Logs.OperationRecord(t0, "資訊", "十月最後", "PC"),
+                new Core.Logs.OperationRecord(t0.AddMinutes(20), "錯誤", "十一月第一筆, 含逗號", "PC"),
+            }, r => r.Time);
+            Check("紀錄：依月份分檔", Directory.GetFiles(Path.Combine(tempRoot, "operations"), "*.jsonl").Length == 2);
+            var q = Core.Logs.LogStore.Query<Core.Logs.OperationRecord>(Core.Logs.LogKinds.Operation, t0.AddMinutes(-1), t0.AddHours(1), r => r.Time);
+            Check("紀錄：跨月份查詢並依時間排序", q.Count == 2 && q[0].Message == "十月最後");
+            var q2 = Core.Logs.LogStore.Query<Core.Logs.OperationRecord>(Core.Logs.LogKinds.Operation, t0.AddMinutes(10), t0.AddHours(1), r => r.Time);
+            Check("紀錄：時間範圍過濾", q2.Count == 1);
+            var removedFiles = Core.Logs.LogStore.Cleanup(10, new DateTime(2026, 11, 20));
+            Check("紀錄：清除超過保留天數的整月檔案", removedFiles == 1, $"removed={removedFiles}");
+
+            var accessJson = System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"user_email\":\"a@x.com\",\"ip_address\":\"1.2.3.4\",\"app_domain\":\"rdp.x.com\",\"action\":\"login\"," +
+                "\"allowed\":false,\"connection\":\"onetimepin\",\"created_at\":\"2026-11-14T10:00:00Z\",\"ray_id\":\"r1\"}")!;
+            var login = Core.Logs.AccessLogCollector.Parse(accessJson);
+            Check("登入紀錄：解析欄位", login is { Email: "a@x.com", Allowed: false, RayId: "r1", App: "rdp.x.com" });
+            var deduped = Core.Logs.AccessLogCollector.Dedupe([login!, login!], [login!]);
+            Check("登入紀錄：已存在的與重複的都會去除", deduped.Count == 0);
+
+            Core.Logs.RdpEventRecord Ev(int min, int id, int session, string user = "PC\\u") =>
+                new(t0.AddMinutes(min), id, "PC", user, session, "192.168.5.10", min);
+            var sessions = Core.Logs.RdpEventCollector.BuildSessions(
+            [
+                Ev(0, 21, 2), Ev(30, 24, 2), Ev(40, 25, 2), Ev(70, 23, 2),
+                Ev(80, 21, 3),
+                new(t0.AddMinutes(5), 4625, "PC", "PC\\bad", 0, "192.168.5.10", 999),
+            ]);
+            var s2 = sessions.Where(s => s.SessionId == 2).OrderBy(s => s.Start).ToList();
+            Check("使用紀錄：21→24、25→23 組成兩段", s2.Count == 2 && s2[0].Status == "已中斷" && s2[1].Status == "已登出"
+                                               && s2[0].Duration == TimeSpan.FromMinutes(30) && s2[1].Duration == TimeSpan.FromMinutes(30));
+            Check("使用紀錄：只有開始的是使用中", sessions.Any(s => s.SessionId == 3 && s.Status == "使用中" && s.End is null));
+            Check("使用紀錄：4625 為登入失敗", sessions.Any(s => s.Status == "登入失敗" && s.User == "PC\\bad"));
+
+            var csv = Core.Logs.LogStore.ToCsv([["時間", "訊息"], ["t", "a,b \"c\"\n第二行"]]);
+            Check("CSV：逗號、引號、換行跳脫", csv == "時間,訊息\r\nt,\"a,b \"\"c\"\"\n第二行\"\r\n", csv.Replace("\r", "\\r").Replace("\n", "\\n"));
+            var csvPath = Path.Combine(tempRoot, "x.csv");
+            Core.Logs.LogStore.WriteCsv(csvPath, [["a"]]);
+            var bytes = File.ReadAllBytes(csvPath);
+            Check("CSV：含 UTF-8 BOM（Excel 不亂碼）", bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+
+            var fields = Core.Logs.NetworkLogCollector.ChooseFields(
+                ["AccountGatewayL4SessionsAdaptiveGroups", "AccountGatewayL4SessionsAdaptiveGroupsDimensions"],
+                ["datetime", "email", "destinationIp", "destinationPort", "transport"],
+                ["bytesSent", "bytesReceived"],
+                ["datetime_geq", "datetime_lt"], hasCount: true);
+            Check("網路：從 schema 選出欄位", fields is { TimeField: "datetime", UserField: "email", DestIpField: "destinationIp",
+                                                  DestPortField: "destinationPort", SentField: "bytesSent", ReceivedField: "bytesReceived" });
+            Check("網路：沒有資料集時回傳 null", Core.Logs.NetworkLogCollector.ChooseFields(["Other"], [], [], [], false) is null);
+            var gql = Core.Logs.NetworkLogCollector.BuildQuery(fields!);
+            Check("網路：GraphQL 查詢含欄位與時間篩選", gql.Contains("datetime_geq: $since") && gql.Contains("sum { bytesSent bytesReceived }"));
+            var gqlData = System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"viewer\":{\"accounts\":[{\"rows\":[" +
+                "{\"count\":3,\"dimensions\":{\"datetime\":\"2026-11-14T10:00:00Z\",\"email\":\"a@x.com\",\"destinationIp\":\"192.168.5.200\",\"destinationPort\":3389},\"sum\":{\"bytesSent\":1000,\"bytesReceived\":5000}}," +
+                "{\"count\":1,\"dimensions\":{\"datetime\":\"2026-11-14T10:01:00Z\",\"email\":\"a@x.com\",\"destinationIp\":\"8.8.8.8\",\"destinationPort\":443},\"sum\":{\"bytesSent\":1,\"bytesReceived\":1}}" +
+                "]}]}}")!;
+            var netRows = Core.Logs.NetworkLogCollector.ParseRows(gqlData, fields!, new HashSet<string> { "192.168.5.200" });
+            Check("網路：只保留被開放電腦的流量", netRows.Count == 1 && netRows[0].Destination == "192.168.5.200:3389"
+                                             && netRows[0].BytesReceived == 5000 && netRows[0].Count == 3);
+
+            var realEvents = Core.Logs.RdpEventCollector.Collect(new Core.Logs.LogState());
+            Check("使用紀錄：可讀取本機 Windows 事件（只讀）", true, $"讀到 {realEvents} 筆遠端桌面事件");
+        }
+        finally
+        {
+            Core.Logs.LogStore.Root = realRoot;
+            try { Directory.Delete(tempRoot, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
 
         // ---- .rdp 檔 ----
         Check(".rdp：有預設帳號時寫入 username",

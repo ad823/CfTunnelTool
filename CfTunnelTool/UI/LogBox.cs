@@ -40,9 +40,18 @@ sealed class LogBox : RichTextBox, ILog
         ScrollToCaret();
     }
 
-    public void Info(string message) => Append(InfoColor, "   ", message);
-    public void Step(string message) => Append(StepColor, "▶ ", message);
-    public void Ok(string message) => Append(OkColor, " ✓ ", message);
-    public void Warn(string message) => Append(WarnColor, " ! ", message);
-    public void Error(string message) => Append(ErrorColor, " ✗ ", message);
+    /// <summary>是否同時寫入程式操作紀錄（截圖、自我測試時關閉，避免寫入假資料）。</summary>
+    public static bool PersistToFile = true;
+
+    void Log(string level, Color color, string prefix, string message)
+    {
+        if (PersistToFile) Core.Logs.OperationLog.Write(level, message);
+        Append(color, prefix, message);
+    }
+
+    public void Info(string message) => Log("資訊", InfoColor, "   ", message);
+    public void Step(string message) => Log("步驟", StepColor, "▶ ", message);
+    public void Ok(string message) => Log("成功", OkColor, " ✓ ", message);
+    public void Warn(string message) => Log("警告", WarnColor, " ! ", message);
+    public void Error(string message) => Log("錯誤", ErrorColor, " ✗ ", message);
 }

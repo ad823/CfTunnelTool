@@ -181,3 +181,16 @@ git push origin v1.0.1
 鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.
 
 程式內含公司資訊，會顯示在檔案內容和「設定 → 應用程式」。目前執行檔還沒有程式碼簽章，所以 UAC 視窗會顯示「不明的發行者」，SmartScreen 也會跳出藍色警告。公司取得程式碼簽章憑證後，可以在 GitHub Actions 發版時自動簽章。
+
+## 紀錄
+
+管理畫面的「紀錄…」可查詢四種紀錄，依日期與文字篩選並匯出 CSV：
+
+| 紀錄 | 來源 | 內容 |
+|---|---|---|
+| 登入 | Cloudflare Access | Email、時間、IP、服務、允許／擋下 |
+| 遠端桌面使用 | 被連電腦的 Windows 事件 | Windows 帳號、連入／中斷／登出、時長、登入失敗 |
+| 網路傳輸 | Cloudflare Gateway（WARP，抽樣統計） | 使用者、目的電腦、傳送／接收量 |
+| 程式操作 | CfTunnelTool 記錄視窗 | 部署、修改、移除、連線等 |
+
+Cloudflare 免費方案只保留登入與網路紀錄 24 小時，所以「啟用每小時自動收集」會建立以 SYSTEM 執行的 Windows 排程，把紀錄存到 `C:\ProgramData\CfTunnelTool\logs`（僅系統管理員可讀，預設保留 365 天）。Token 需另加 `Access: Audit Logs Read` 與 `Account Analytics Read`。

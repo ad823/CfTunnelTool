@@ -37,6 +37,20 @@ static class Program
             return 0;
         }
 
+        // 排程每小時執行：收集紀錄後結束，不開任何視窗
+        if (args.Contains("--collect-logs"))
+        {
+            try
+            {
+                Core.Logs.LogCollector.RunAsync(Core.Logs.CollectorSchedule.LoadToken()).GetAwaiter().GetResult();
+                return 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return 1;
+            }
+        }
+
         // 「設定 → 應用程式」的解除安裝
         if (args.Contains("--uninstall"))
             return UninstallFromAppsList();

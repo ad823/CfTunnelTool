@@ -9,6 +9,7 @@ static class ScreenshotRunner
 {
     public static void Run(string dir)
     {
+        LogBox.PersistToFile = false; // 截圖的假記錄不寫入真正的操作紀錄
         Directory.CreateDirectory(dir);
 
         var state = new WizardState
@@ -121,6 +122,66 @@ static class ScreenshotRunner
         Pump(500);
         Capture(edit, Path.Combine(dir, "machine-edit.png"));
         edit.Close();
+
+        // 紀錄視窗：用暫存資料夾的假資料
+        var realRoot = Core.Logs.LogStore.Root;
+        Core.Logs.LogStore.Root = Path.Combine(Path.GetTempPath(), "cftunnel-shots-logs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            SeedDemoLogs();
+            var logs = new LogsForm(LogsMode.Admin) { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
+            logs.Show();
+            Pump(1500);
+            Capture(logs, Path.Combine(dir, "logs-login.png"));
+            var tabs = FindTabs(logs);
+            if (tabs is not null)
+            {
+                tabs.SelectedIndex = 1;
+                Pump(500);
+                Capture(logs, Path.Combine(dir, "logs-rdp.png"));
+                tabs.SelectedIndex = 2;
+                Pump(500);
+                Capture(logs, Path.Combine(dir, "logs-network.png"));
+            }
+            logs.Close();
+        }
+        finally
+        {
+            try { Directory.Delete(Core.Logs.LogStore.Root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            Core.Logs.LogStore.Root = realRoot;
+        }
+    }
+
+    static TabControl? FindTabs(Control c) =>
+        c as TabControl ?? c.Controls.Cast<Control>().Select(FindTabs).FirstOrDefault(t => t is not null);
+
+    static void SeedDemoLogs()
+    {
+        var now = DateTime.Now;
+        Core.Logs.LogStore.Append(Core.Logs.LogKinds.Login, new[]
+        {
+            new Core.Logs.LoginRecord(now.AddHours(-1), "alice@yourdomain.com", "203.0.113.10", "yourteam.cloudflareaccess.com", "login", true, "onetimepin", "a1"),
+            new Core.Logs.LoginRecord(now.AddMinutes(-50), "alice@yourdomain.com", "203.0.113.10", "rdp.yourdomain.com", "login", true, "onetimepin", "a2"),
+            new Core.Logs.LoginRecord(now.AddMinutes(-20), "unknown@example.com", "198.51.100.7", "rdp.yourdomain.com", "login", false, "onetimepin", "a3"),
+            new Core.Logs.LoginRecord(now.AddMinutes(-5), "bob@yourdomain.com", "203.0.113.22", "warp", "login", true, "onetimepin", "a4"),
+        }, r => r.Time);
+        Core.Logs.LogStore.Append(Core.Logs.LogKinds.RdpEvents, new[]
+        {
+            new Core.Logs.RdpEventRecord(now.AddMinutes(-48), 21, "OFFICE-PC", @"OFFICE-PC\alice", 2, "192.168.10.5", 1),
+            new Core.Logs.RdpEventRecord(now.AddMinutes(-12), 24, "OFFICE-PC", @"OFFICE-PC\alice", 2, "192.168.10.5", 2),
+            new Core.Logs.RdpEventRecord(now.AddMinutes(-30), 4625, "OFFICE-PC", @"OFFICE-PC\admin", 0, "192.168.10.5", 3),
+            new Core.Logs.RdpEventRecord(now.AddMinutes(-4), 21, "OFFICE-PC", @"OFFICE-PC\bob", 3, "192.168.10.5", 4),
+        }, r => r.Time);
+        Core.Logs.LogStore.Append(Core.Logs.LogKinds.Network, new[]
+        {
+            new Core.Logs.NetworkRecord(now.AddMinutes(-4), "bob@yourdomain.com", "192.168.10.20:3389", 2_450_000, 38_900_000, 6),
+            new Core.Logs.NetworkRecord(now.AddMinutes(-3), "bob@yourdomain.com", "192.168.10.20:3389", 1_120_000, 21_300_000, 4),
+        }, r => r.Time);
+        Core.Logs.LogStore.Append(Core.Logs.LogKinds.Operation, new[]
+        {
+            new Core.Logs.OperationRecord(now.AddHours(-2), "步驟", "設定瀏覽器遠端桌面應用程式", "OFFICE-PC"),
+            new Core.Logs.OperationRecord(now.AddHours(-2), "成功", "瀏覽器遠端桌面已設定", "OFFICE-PC"),
+        }, r => r.Time);
     }
 
     static RdpConfig DemoRdp() => new()

@@ -127,7 +127,14 @@ sealed class ClientForm : Form
         _toggleImport.Click += (_, _) => _importPanel!.Visible = !_importPanel.Visible;
         _remove = Act(Theme.DangerButton("移除這個公司連線…"), RemoveCompanyAsync);
         _remove.Margin = new Padding(0, 8, 8, 4);
-        AddRow(Row(_toggleImport, _remove));
+        var logs = Theme.SecondaryButton("紀錄…");
+        logs.Margin = new Padding(0, 8, 8, 4);
+        logs.Click += (_, _) =>
+        {
+            using var f = new LogsForm(LogsMode.Client);
+            f.ShowDialog(this);
+        };
+        AddRow(Row(_toggleImport, _remove, logs));
 
         _importPanel = new TableLayoutPanel
         {

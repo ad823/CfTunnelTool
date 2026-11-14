@@ -123,6 +123,12 @@ sealed class DashboardForm : Form
         _copyRdp = Action(Theme.SecondaryButton("複製 RDP 連線資訊"), () => { CopyRdpInfo(); return Task.CompletedTask; });
         Action(Theme.SecondaryButton("重新啟動連線服務"), RestartServiceAsync);
         Action(Theme.SecondaryButton("修改設定…"), EditAsync);
+        Action(Theme.SecondaryButton("紀錄…"), () =>
+        {
+            using var logs = new LogsForm(LogsMode.Admin, () => GetToken(prompt: true));
+            logs.ShowDialog(this);
+            return Task.CompletedTask;
+        });
         Action(Theme.SecondaryButton("Cloudflare 後台 ↗"), () => { Theme.OpenUrl("https://one.dash.cloudflare.com/"); return Task.CompletedTask; });
         Action(Theme.DangerButton("移除全部設定…"), RemoveAsync);
         AddRow(buttons);
