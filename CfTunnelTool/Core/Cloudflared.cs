@@ -121,6 +121,18 @@ static class Cloudflared
         else log.Warn($"服務狀態：{sc.Status}");
     }
 
+    /// <summary>等待服務從系統中消失（Windows 刪除服務是非同步的，會延遲數秒）。</summary>
+    static bool WaitForServiceGone(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (GetServiceStatus() is not null)
+        {
+            if (DateTime.UtcNow >= deadline) return false;
+            Thread.Sleep(500);
+        }
+        return true;
+    }
+
     /// <summary>移除服務（會阻塞數秒，請在背景執行緒呼叫）。</summary>
     public static void UninstallService(string? exe)
     {
@@ -128,16 +140,23 @@ static class Cloudflared
 
         if (exe is not null)
         {
-            var r = Run(exe, "service", "uninstall");
-            if (r.ExitCode == 0 && GetServiceStatus() is null) return;
+            Run(exe, "service", "uninstall");
+            if (WaitForServiceGone(TimeSpan.FromSeconds(15))) return;
         }
 
         // 後備方案：直接用 sc.exe 停止並刪除
         Run("sc.exe", "stop", ServiceName);
         Thread.Sleep(2000);
         var del = Run("sc.exe", "delete", ServiceName);
-        if (del.ExitCode != 0)
-            throw new InvalidOperationException($"無法移除 {ServiceName} 服務：\n{del.Output}");
+        if (WaitForServiceGone(TimeSpan.FromSeconds(15))) return;
+
+        // 1060：服務已不存在；1072：已標記為刪除，等開啟它的程式關閉後才會消失
+        const int ServiceDoesNotExist = 1060, MarkedForDelete = 1072;
+        if (del.ExitCode is ServiceDoesNotExist) return;
+        if (del.ExitCode is 0 or MarkedForDelete)
+            throw new InvalidOperationException(
+                $"舊的 {ServiceName} 服務正在移除中，請關閉「服務」管理視窗或工作管理員後，等 10 秒再按「重新部署」。");
+        throw new InvalidOperationException($"無法移除 {ServiceName} 服務：\n{del.Output.Trim()}");
     }
 
     /// <summary>重新啟動服務（會阻塞數秒，請在背景執行緒呼叫）。</summary>

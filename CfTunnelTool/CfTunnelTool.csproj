@@ -10,7 +10,7 @@
     <RootNamespace>CfTunnelTool</RootNamespace>
     <Product>CfTunnelTool</Product>
     <AssemblyTitle>CfTunnelTool</AssemblyTitle>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
 
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
