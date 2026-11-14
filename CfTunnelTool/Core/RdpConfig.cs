@@ -136,6 +136,9 @@ sealed partial class RdpConfig
     public string? WarpPolicyId { get; set; }
     public string? WarpEnrollAppId { get; set; }
 
+    /// <summary>WARP 模式：Gateway 網路規則，封鎖被開放電腦上遠端桌面以外的連接埠。</summary>
+    public string? GatewayRuleId { get; set; }
+
     /// <summary>Zero Trust 組織網域，例如 myteam.cloudflareaccess.com，用來組 2FA 註冊網址。</summary>
     public string? AuthDomain { get; set; }
 

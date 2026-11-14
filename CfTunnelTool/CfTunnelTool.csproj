@@ -10,7 +10,7 @@
     <RootNamespace>CfTunnelTool</RootNamespace>
     <Product>CfTunnelTool</Product>
     <AssemblyTitle>CfTunnelTool</AssemblyTitle>
-    <Version>1.7.2</Version>
+    <Version>1.7.3</Version>
 
     <!-- 發行商資訊：顯示在檔案內容、工作管理員與「設定 → 應用程式」 -->
     <Company>鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.</Company>
