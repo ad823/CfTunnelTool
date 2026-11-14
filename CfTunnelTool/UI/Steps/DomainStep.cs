@@ -11,7 +11,7 @@ sealed class DomainStep : StepPage
     readonly Label _zoneHint;
 
     public override string SidebarTitle => "網域";
-    public override string Heading => "步驟 2／4　選擇網域與名稱";
+    public override string Heading => "步驟 2／5　選擇網域與名稱";
 
     public override bool CanGoNext =>
         _zones.SelectedItem is ZoneInfo && ToolConfig.TunnelNamePattern().IsMatch(_name.Text.Trim());

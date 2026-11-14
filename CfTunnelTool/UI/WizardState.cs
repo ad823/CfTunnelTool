@@ -17,6 +17,10 @@ sealed class WizardState
     /// <summary>修改既有設定時才有值。</summary>
     public string? TunnelId { get; set; }
     public List<RouteConfig> Routes { get; set; } = [];
+
+    /// <summary>瀏覽器遠端桌面 + 2FA；null 代表從未設定。</summary>
+    public RdpConfig? Rdp { get; set; }
+
     public string? CloudflaredPath { get; set; }
 
     /// <summary>部署成功後才有值。</summary>
@@ -33,6 +37,7 @@ sealed class WizardState
             s.TunnelName = config.TunnelName;
             s.TunnelId = config.TunnelId;
             s.Routes = config.Routes.Select(r => r.Clone()).ToList();
+            s.Rdp = config.Rdp?.Clone();
             s.CloudflaredPath = config.CloudflaredPath;
         }
         return s;
@@ -44,6 +49,7 @@ sealed class WizardState
         TunnelName = TunnelName,
         TunnelId = TunnelId,
         Routes = Routes.Select(r => r.Clone()).ToList(),
+        Rdp = Rdp?.Clone(),
         CloudflaredPath = CloudflaredPath,
     };
 

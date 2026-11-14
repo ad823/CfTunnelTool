@@ -39,6 +39,7 @@ sealed class WizardForm : Form
             new TokenStep(state),
             new DomainStep(state),
             new RoutesStep(state),
+            new RdpStep(state),
             new DeployStep(state),
             new DoneStep(state),
         ];
@@ -171,7 +172,7 @@ sealed class WizardForm : Form
         Current.OnEnter();
         _host.ResumeLayout();
 
-        string[] marks = ["①", "②", "③", "④", "⑤", "⑥"];
+        string[] marks = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"];
         for (int i = 0; i < _sideItems.Count; i++)
         {
             var item = _sideItems[i];
@@ -236,6 +237,7 @@ sealed class WizardForm : Form
     }
 
 #if DEBUG
-    internal void DemoDeployLog() => ((DeployStep)_steps[4]).DemoLog();
+    internal void DemoDeployLog() => _steps.OfType<DeployStep>().First().DemoLog();
+    internal void DemoScrollToEnd() => Current.ScrollToEnd();
 #endif
 }

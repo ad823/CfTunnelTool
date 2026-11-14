@@ -19,13 +19,47 @@ CfTunnelTool 使用說明
        按「其他資訊」→「仍要執行」
      （原因是這個程式沒有購買程式碼簽章，不是病毒）
   4. Windows 詢問是否允許變更時，按「是」（需要系統管理員權限才能安裝連線服務）
-  5. 跟著畫面上的精靈完成 4 個步驟：
+  5. 跟著畫面上的精靈完成 5 個步驟：
        步驟 1  建立 Cloudflare API Token（畫面上有詳細教學與權限表）
        步驟 2  選擇網域、設定這台電腦的 Tunnel 名稱
-       步驟 3  設定對外網址，例如 api → http://localhost:5000
-       步驟 4  按「開始部署」，等待約 1 分鐘
+       步驟 3  設定對外網址，例如 api → http://localhost:5000（只用遠端桌面可以不設）
+       步驟 4  （選用）遠端桌面 RDP ＋ 2FA，見下方說明
+       步驟 5  按「開始部署」，等待約 1 分鐘
 
   完成後，開始功能表與桌面會出現「CfTunnelTool」捷徑，之後用它開啟管理畫面。
+
+
+■ 遠端桌面（瀏覽器 RDP ＋ 2FA）
+  讓使用者用瀏覽器連到這台電腦或區網內其他電腦的遠端桌面，不需要安裝任何軟體。
+  登入順序：Email 驗證碼 → 2FA（Authenticator App / 安全金鑰 / 生物辨識）→ Windows 帳號密碼。
+
+  管理者設定：
+  1. API Token 需要額外三個權限（精靈的權限表標示為「遠端桌面」的三列）：
+       Account → Access: Apps and Policies → Edit
+       Account → Access: Organizations, Identity Providers, and Groups → Edit
+       Account → Zero Trust → Edit
+  2. Cloudflare 帳號需要先啟用 Zero Trust（免費方案即可）：
+       到 https://one.dash.cloudflare.com/ 依畫面設定 team 名稱、選擇 Free 方案
+  3. 在精靈「遠端桌面」步驟：
+       - 勾選「啟用瀏覽器遠端桌面（RDP）＋ 2FA」
+       - 按「加入這台電腦」，或新增區網其他電腦（填該電腦的區網 IP）
+       - 輸入允許登入的 Email（一行一個；@公司網域.com 代表整個網域）
+       - 選擇 2FA 方式與重新驗證間隔、剪貼簿與檔案傳輸權限
+  4. 部署完成後，在完成頁或管理畫面按「複製連線資訊」，貼給使用者
+
+  使用者第一次使用：
+  1. 開啟管理者提供的「註冊 2FA 裝置」網址，用 Email 驗證碼登入
+  2. 依畫面註冊 2FA（例如用手機 Google / Microsoft Authenticator 掃描 QR Code）
+  3. 之後開啟各台電腦的連線網址，依序輸入 Email 驗證碼、2FA 驗證碼、Windows 帳號密碼
+
+  被開放的電腦需要：
+  - Windows 專業版 / 企業版 / Server（家用版不能當遠端桌面主機）
+  - 已啟用遠端桌面（精靈可以一鍵啟用這台電腦）
+  - 固定 IP，或在路由器做 DHCP 保留
+  - 加入 Microsoft Entra ID 的電腦，需要關閉遠端桌面的 NLA 強制要求
+
+  限制：剪貼簿單次 500 KB、不能複製圖片、沒有聲音、檔案傳輸為 Beta 功能。
+  需要聲音、多螢幕時，請改用 Cloudflare WARP ＋ Windows 遠端桌面連線。
 
 
 ■ 驗證清單（建議第一次部署時逐項確認）
@@ -33,7 +67,11 @@ CfTunnelTool 使用說明
   [ ] 管理畫面顯示「本機連線服務：執行中」、「Cloudflare Tunnel：已連線」
   [ ] 重新開機後，不開 CfTunnelTool，網址仍然可以連線
   [ ] 管理畫面按「修改設定…」新增一個網址並重新部署，新網址可以連線
-  [ ] 測試完畢後按「移除全部設定…」，確認 Cloudflare 後台的 Tunnel 與 DNS 紀錄已刪除
+  [ ] （遠端桌面）用另一個 Email 帳號開啟連線網址，確認不在允許清單的人無法登入
+  [ ] （遠端桌面）允許的使用者第一次登入時會要求註冊 2FA，之後每次都要輸入 2FA
+  [ ] （遠端桌面）可以看到 Windows 桌面，文字剪貼簿與檔案上傳／下載符合設定
+  [ ] 測試完畢後按「移除全部設定…」，確認 Cloudflare 後台的 Tunnel、DNS 紀錄、
+      Access 應用程式與政策、目標（Targets）、路由（Routes）都已刪除
 
 
 ■ 遇到問題時請提供

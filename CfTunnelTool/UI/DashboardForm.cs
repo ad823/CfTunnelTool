@@ -16,8 +16,11 @@ sealed class DashboardForm : Form
     readonly Label _subtitle;
     readonly StatusCard _serviceCard, _tunnelCard, _checkedCard;
     readonly ListView _routes;
+    readonly ListViewGroup _webGroup = new("網站／API");
+    readonly ListViewGroup _rdpGroup = new("遠端桌面（瀏覽器 RDP ＋ 2FA）");
     readonly LogBox _log;
     readonly List<Button> _actions = [];
+    readonly Button _copyRdp;
 
     public DashboardForm(ToolConfig config, bool demo = false)
     {
@@ -77,7 +80,7 @@ sealed class DashboardForm : Form
         AddRow(cards);
 
         // ---- 網址清單 ----
-        AddRow(new Label { Text = "對外網址（點兩下開啟）", AutoSize = true, Font = Theme.Sub, Margin = new Padding(0, 0, 0, 6) });
+        AddRow(new Label { Text = "對外網址與遠端桌面（點兩下開啟）", AutoSize = true, Font = Theme.Sub, Margin = new Padding(0, 0, 0, 6) });
         _routes = new ListView
         {
             Dock = DockStyle.Fill,
@@ -87,11 +90,14 @@ sealed class DashboardForm : Form
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
             BorderStyle = BorderStyle.FixedSingle,
             Margin = new Padding(0, 0, 0, 10),
+            ShowGroups = true,
         };
         _routes.Columns.Add("對外網址");
         _routes.Columns.Add("本機服務");
-        _routes.Columns.Add("DNS");
-        _routes.Columns.Add("本機服務狀態");
+        _routes.Columns.Add("Cloudflare 設定");
+        _routes.Columns.Add("本機連線狀態");
+        _routes.Groups.Add(_webGroup);
+        _routes.Groups.Add(_rdpGroup);
         _routes.Resize += (_, _) => ResizeColumns();
         _routes.DoubleClick += (_, _) => OpenSelected();
         AddRow(_routes, SizeType.Percent, 50);
@@ -114,6 +120,7 @@ sealed class DashboardForm : Form
         }
         Action(Theme.PrimaryButton("重新整理"), () => RefreshAsync(promptForToken: true));
         Action(Theme.SecondaryButton("開啟選取的網址"), () => { OpenSelected(); return Task.CompletedTask; });
+        _copyRdp = Action(Theme.SecondaryButton("複製 RDP 連線資訊"), () => { CopyRdpInfo(); return Task.CompletedTask; });
         Action(Theme.SecondaryButton("重新啟動連線服務"), RestartServiceAsync);
         Action(Theme.SecondaryButton("修改設定…"), EditAsync);
         Action(Theme.SecondaryButton("Cloudflare 後台 ↗"), () => { Theme.OpenUrl("https://one.dash.cloudflare.com/"); return Task.CompletedTask; });
@@ -142,15 +149,41 @@ sealed class DashboardForm : Form
         _routes.Items.Clear();
         foreach (var r in _config.Routes)
         {
-            var item = new ListViewItem($"https://{r.Hostname}") { Tag = r, UseItemStyleForSubItems = false };
+            var item = new ListViewItem($"https://{r.Hostname}", _webGroup) { Tag = r, UseItemStyleForSubItems = false };
             item.SubItems.Add(r.Service);
             item.SubItems.Add("—");
             item.SubItems.Add("—");
             item.ForeColor = Theme.AccentDark;
             _routes.Items.Add(item);
         }
+        if (_config.RdpEnabled)
+        {
+            foreach (var m in _config.Rdp!.Machines)
+            {
+                var item = new ListViewItem($"{m.Name}（https://{_config.Rdp.Hostname}）", _rdpGroup)
+                {
+                    Tag = m,
+                    UseItemStyleForSubItems = false,
+                    ToolTipText = _config.Rdp.UrlFor(m),
+                };
+                item.SubItems.Add($"RDP {m.Ip}:{m.Port}");
+                item.SubItems.Add("—");
+                item.SubItems.Add("—");
+                item.ForeColor = Theme.AccentDark;
+                _routes.Items.Add(item);
+            }
+        }
+        _routes.ShowItemToolTips = true;
         _routes.EndUpdate();
+        _copyRdp.Visible = _config.RdpEnabled;
         ResizeColumns();
+    }
+
+    void CopyRdpInfo()
+    {
+        if (!_config.RdpEnabled) return;
+        Clipboard.SetText(Steps.DoneStep.BuildRdpInfo(_config.Rdp!));
+        _log.Ok("遠端桌面連線資訊已複製，可以直接貼給使用者。");
     }
 
     void ResizeColumns()
@@ -164,7 +197,10 @@ sealed class DashboardForm : Form
     }
 
     ListViewItem? FindItem(RouteConfig r) =>
-        _routes.Items.Cast<ListViewItem>().FirstOrDefault(i => ((RouteConfig)i.Tag!).Hostname == r.Hostname);
+        _routes.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is RouteConfig rc && rc.Hostname == r.Hostname);
+
+    ListViewItem? FindItem(RdpMachine m) =>
+        _routes.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is RdpMachine rm && rm.Name == m.Name);
 
     static void SetSub(ListViewItem item, int col, string text, Color color)
     {
@@ -175,7 +211,9 @@ sealed class DashboardForm : Form
     void OpenSelected()
     {
         if (_routes.SelectedItems.Count == 0 && _routes.Items.Count > 0) _routes.Items[0].Selected = true;
-        if (_routes.SelectedItems.Count > 0) Theme.OpenUrl(_routes.SelectedItems[0].Text);
+        if (_routes.SelectedItems.Count == 0) return;
+        var item = _routes.SelectedItems[0];
+        Theme.OpenUrl(item.Tag is RdpMachine m && _config.Rdp is { } rdp ? rdp.UrlFor(m) : item.Text);
     }
 
     void SetBusy(bool busy)
@@ -221,6 +259,15 @@ sealed class DashboardForm : Form
                 if (FindItem(c.Route) is { } item)
                     SetSub(item, ColLocal, c.Ok ? "✓ 有回應" : "✗ 沒有回應", c.Ok ? Theme.Success : Theme.Danger);
 
+            // 2b. 遠端桌面：從這台電腦測試各台電腦的 RDP 連接埠
+            if (_config.RdpEnabled)
+            {
+                var checks = _config.Rdp!.Machines.Select(async m => (m, ok: await RdpHost.TestTcpAsync(m.Ip, m.Port)));
+                foreach (var (m, ok) in await Task.WhenAll(checks))
+                    if (FindItem(m) is { } item)
+                        SetSub(item, ColLocal, ok ? "✓ 可以連線" : "✗ 連不到", ok ? Theme.Success : Theme.Danger);
+            }
+
             // 3. Cloudflare 線上狀態（需要 Token）
             var token = GetToken(promptForToken);
             if (_demo)
@@ -253,6 +300,22 @@ sealed class DashboardForm : Form
                     if (FindItem(r.Route) is { } item)
                         SetSub(item, ColDns, r.Dns == DnsState.Ok ? "✓ 正常" : "✗ " + r.Detail,
                             r.Dns == DnsState.Ok ? Theme.Success : Theme.Danger);
+
+                if (status.Rdp is { } rdpStatus)
+                {
+                    foreach (var ms in rdpStatus.Machines)
+                    {
+                        if (FindItem(ms.Machine) is not { } item) continue;
+                        var problems = new List<string>();
+                        if (!rdpStatus.AppOk) problems.Add("應用程式");
+                        if (!ms.TargetOk) problems.Add("目標");
+                        if (!ms.RouteOk) problems.Add("路由");
+                        if (problems.Count == 0) SetSub(item, ColDns, "✓ 正常", Theme.Success);
+                        else SetSub(item, ColDns, "✗ 缺少" + string.Join("、", problems), Theme.Danger);
+                    }
+                    if (!rdpStatus.AppOk || rdpStatus.Machines.Any(x => !x.TargetOk || !x.RouteOk))
+                        _log.Warn("遠端桌面的 Cloudflare 設定不完整，請按「修改設定…」重新部署。");
+                }
 
                 if (status.Tunnel?.Status is not null and not "healthy" && svc == ServiceControllerStatus.Running)
                     _log.Warn("服務在執行但 Tunnel 未連線：請確認這台電腦能上網，或按「重新啟動連線服務」。");

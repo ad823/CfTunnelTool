@@ -13,14 +13,14 @@ sealed class RoutesStep : StepPage
     bool _loaded;
 
     public override string SidebarTitle => "網址";
-    public override string Heading => "步驟 3／4　設定對外網址";
-    public override bool CanGoNext => _grid.Rows.Count > 0;
+    public override string Heading => "步驟 3／5　設定對外網址（網站／API）";
 
     public RoutesStep(WizardState state)
     {
         _state = state;
 
-        AddText("每一列代表一個對外網址，以及它要轉到這台電腦上的哪個服務。網站和 API 各一列，可以自由新增或刪除。");
+        AddText("每一列代表一個對外網址，以及它要轉到這台電腦上的哪個服務。網站和 API 各一列，可以自由新增或刪除。" +
+                "只需要遠端桌面的話，可以刪除所有列，直接到下一步。");
 
         _grid = BuildGrid();
         Add(_grid);
@@ -220,9 +220,11 @@ sealed class RoutesStep : StepPage
 
         var probe = _state.ToConfig();
         probe.Routes = rows.Select(x => x.Route).ToList();
+        probe.Rdp = null; // 遠端桌面在下一步驗證
         try
         {
-            probe.Validate();
+            // 沒有任何網址也可以（只用遠端桌面），在下一步再整體檢查
+            if (probe.Routes.Count > 0) probe.Validate();
         }
         catch (InvalidOperationException ex)
         {

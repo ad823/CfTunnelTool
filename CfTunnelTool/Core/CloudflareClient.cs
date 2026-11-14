@@ -5,7 +5,19 @@ using System.Text.Json.Nodes;
 
 namespace CfTunnelTool.Core;
 
-sealed class CloudflareApiException(string message) : Exception(message);
+sealed class CloudflareApiException(string message, int statusCode = 0, IReadOnlySet<string>? codes = null) : Exception(message)
+{
+    /// <summary>HTTP 狀態碼；0 代表不是來自 HTTP 回應。</summary>
+    public int StatusCode => statusCode;
+
+    /// <summary>Cloudflare 回傳的錯誤代碼。</summary>
+    public IReadOnlySet<string> Codes => codes ?? new HashSet<string>();
+
+    /// <summary>資源不存在。7003 是「網址路由錯誤」（例如 ID 格式不對），不算資源不存在。</summary>
+    public bool IsNotFound => statusCode == 404 && !Codes.Contains("7003");
+
+    public bool IsForbidden => statusCode is 401 or 403;
+}
 
 sealed record ZoneInfo(string Name, string ZoneId, string AccountId, string Status)
 {
@@ -23,7 +35,7 @@ record TunnelInfo(string Id, string Name, string Status, IReadOnlyList<TunnelCon
 ///   Zone    → DNS → Edit
 ///   Zone    → Zone → Read
 /// </summary>
-sealed class CloudflareClient : IDisposable
+sealed partial class CloudflareClient : IDisposable
 {
     public const string ManagedComment = "Managed by CfTunnelTool";
 
@@ -58,13 +70,14 @@ sealed class CloudflareClient : IDisposable
         {
             var errorNodes = root?["errors"]?.AsArray().ToList() ?? [];
             var errors = errorNodes.Select(e => $"[{e?["code"]}] {e?["message"]}").ToList();
-            var codes = errorNodes.Select(e => e?["code"]?.ToString()).ToHashSet();
-            var hint = codes.Contains("6003") || codes.Contains("6111")
-                ? "（API Token 格式錯誤，請確認複製的 Token 是否完整）"
+            var codes = errorNodes.Select(e => e?["code"]?.ToString() ?? "").Where(c => c.Length > 0).ToHashSet();
+            var hint = codes.Contains("6003") || codes.Contains("6111") || codes.Contains("9106")
+                ? "（API Token 無效，請確認複製的 Token 是否完整、是否已被撤銷）"
                 : resp.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized
                     ? "（請確認 API Token 是否有效、權限是否足夠）" : "";
             throw new CloudflareApiException(
-                $"Cloudflare API 失敗 (HTTP {(int)resp.StatusCode})：{string.Join("; ", errors)}{hint}");
+                $"Cloudflare API 失敗 (HTTP {(int)resp.StatusCode})：{string.Join("; ", errors)}{hint}",
+                (int)resp.StatusCode, codes);
         }
         return root;
     }

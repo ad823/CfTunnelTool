@@ -5,7 +5,7 @@ record LocalCheck(RouteConfig Route, bool Ok, string Message);
 
 enum DnsState { Ok, Missing, Other }
 record RouteStatus(RouteConfig Route, DnsState Dns, string Detail);
-record OnlineStatus(TunnelInfo? Tunnel, IReadOnlyList<RouteStatus> Routes);
+record OnlineStatus(TunnelInfo? Tunnel, IReadOnlyList<RouteStatus> Routes, RdpOnlineStatus? Rdp);
 
 /// <summary>
 /// 部署流程：Zone → Tunnel → 路由 → DNS → cloudflared 服務。
@@ -16,19 +16,37 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
 {
     // ================= 部署 =================
 
+    static bool HasRdpResources(RdpConfig rdp) =>
+        rdp.AppId is not null || rdp.PolicyId is not null ||
+        rdp.Machines.Any(m => m.TargetId is not null || m.RouteId is not null);
+
+    /// <summary>讀取上一次部署的設定，用來找出需要清掉的舊資源。</summary>
+    static ToolConfig? LoadPrevious()
+    {
+        try { return AppStorage.LoadConfig(); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.Text.Json.JsonException or IOException)
+        {
+            return null;
+        }
+    }
+
     public async Task<DeployResult> DeployAsync(ToolConfig config)
     {
         config.Validate();
+        var previous = LoadPrevious();
 
         log.Step($"查詢網域 {config.Domain}");
         var zone = await cf.GetZoneAsync(config.Domain);
         log.Ok($"Zone ID {zone.ZoneId}");
 
-        log.Step("檢查本機服務");
-        foreach (var c in await CheckLocalServicesAsync(config.Routes))
+        if (config.Routes.Count > 0)
         {
-            if (c.Ok) log.Ok(c.Message);
-            else log.Warn(c.Message + "（Tunnel 仍會建立，服務啟動後即可連線）");
+            log.Step("檢查本機服務");
+            foreach (var c in await CheckLocalServicesAsync(config.Routes))
+            {
+                if (c.Ok) log.Ok(c.Message);
+                else log.Warn(c.Message + "（Tunnel 仍會建立，服務啟動後即可連線）");
+            }
         }
 
         log.Step($"準備 Tunnel「{config.TunnelName}」");
@@ -53,22 +71,43 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
             log.Ok($"沿用既有 Tunnel {tunnelId}");
         }
         var target = CloudflareClient.TunnelTarget(tunnelId);
+        config.TunnelId = tunnelId; // 中途失敗時，重新部署才認得這是自己的 Tunnel
 
         log.Step("寫入路由設定");
         await cf.PutTunnelConfigAsync(zone.AccountId, tunnelId, config.Routes);
         foreach (var r in config.Routes)
             log.Ok($"{r.Hostname} → {r.Service}");
 
-        log.Step("設定 DNS 紀錄");
         var dnsFailures = 0;
-        foreach (var r in config.Routes)
-            if (!await EnsureDnsAsync(zone.ZoneId, r.Hostname, target))
-                dnsFailures++;
+        if (config.Routes.Count > 0)
+        {
+            log.Step("設定 DNS 紀錄");
+            foreach (var r in config.Routes)
+                if (!await EnsureDnsAsync(zone.ZoneId, r.Hostname, target))
+                    dnsFailures++;
+        }
 
         // 已從設定中移除的網址：刪掉指向此 Tunnel 的舊 DNS 紀錄
         var current = config.Routes.Select(r => r.Hostname).ToHashSet();
         foreach (var old in previousHostnames.Where(h => !current.Contains(h)))
             await DeleteTunnelDnsAsync(zone.ZoneId, old, target);
+
+        // 瀏覽器遠端桌面 + 2FA
+        var rdpDeployer = new RdpDeployer(cf, log, confirm);
+        if (config.RdpEnabled)
+        {
+            if (!await rdpDeployer.DeployAsync(config, zone, tunnelId, previous?.Rdp))
+                dnsFailures++;
+        }
+        else if (previous?.Rdp is { } oldRdp && HasRdpResources(oldRdp))
+        {
+            await rdpDeployer.RemoveAsync(oldRdp, zone);
+            if (config.Rdp is { } r)
+            {
+                r.AppId = r.PolicyId = null;
+                foreach (var m in r.Machines) m.TargetId = m.RouteId = null;
+            }
+        }
 
         log.Step("安裝連線服務 cloudflared");
         var exe = await Cloudflared.EnsureInstalledAsync(config.CloudflaredPath, log);
@@ -160,10 +199,21 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
         var zone = await cf.GetZoneAsync(config.Domain);
         var found = await cf.FindTunnelAsync(zone.AccountId, config.TunnelName);
         if (found is null)
-            return new OnlineStatus(null, config.Routes.Select(r => new RouteStatus(r, DnsState.Missing, "Tunnel 不存在")).ToList());
+            return new OnlineStatus(null, config.Routes.Select(r => new RouteStatus(r, DnsState.Missing, "Tunnel 不存在")).ToList(), null);
 
         var tunnel = await cf.GetTunnelAsync(zone.AccountId, found.Id);
         var target = CloudflareClient.TunnelTarget(tunnel.Id);
+
+        RdpOnlineStatus? rdpStatus = null;
+        if (config.RdpEnabled)
+        {
+            try { rdpStatus = await new RdpDeployer(cf, log, confirm).GetStatusAsync(config.Rdp!, zone.AccountId); }
+            catch (CloudflareApiException ex) when (ex.IsForbidden)
+            {
+                log.Warn("API Token 沒有 Zero Trust 權限，無法查詢遠端桌面的線上狀態。");
+            }
+        }
+
         var routes = new List<RouteStatus>();
         foreach (var r in config.Routes)
         {
@@ -175,7 +225,7 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
             else
                 routes.Add(new RouteStatus(r, DnsState.Other, "指向其他地方"));
         }
-        return new OnlineStatus(tunnel, routes);
+        return new OnlineStatus(tunnel, routes, rdpStatus);
     }
 
     public static async Task<List<LocalCheck>> CheckLocalServicesAsync(IEnumerable<RouteConfig> routes)
@@ -212,6 +262,11 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
         log.Ok("服務已移除");
 
         var zone = await cf.GetZoneAsync(config.Domain);
+
+        // 遠端桌面的資源（應用程式、政策、目標、路由）要在刪 Tunnel 之前移除
+        if (config.Rdp is { } rdp && HasRdpResources(rdp))
+            await new RdpDeployer(cf, log, confirm).RemoveAsync(rdp, zone);
+
         var tunnel = await cf.FindTunnelAsync(zone.AccountId, config.TunnelName);
         if (tunnel is null)
         {

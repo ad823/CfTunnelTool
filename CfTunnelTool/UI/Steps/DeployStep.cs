@@ -14,7 +14,7 @@ sealed class DeployStep : StepPage
     string? _deployedSignature;
 
     public override string SidebarTitle => "部署";
-    public override string Heading => "步驟 4／4　開始部署";
+    public override string Heading => "步驟 5／5　開始部署";
     public override bool CanGoNext => _state.Result is not null && !_running && IsCurrentDeployed;
     public override bool CanGoBack => !_running;
     public override bool IsBusy => _running;
@@ -47,15 +47,47 @@ sealed class DeployStep : StepPage
     }
 
     /// <summary>目前設定的指紋；回上一步改了設定後就需要重新部署。</summary>
-    string Signature() => JsonSerializer.Serialize(new { _state.Domain, _state.TunnelName, _state.Routes });
+    string Signature()
+    {
+        var rdp = _state.Rdp;
+        return JsonSerializer.Serialize(new
+        {
+            _state.Domain,
+            _state.TunnelName,
+            _state.Routes,
+            Rdp = rdp is null ? null : new
+            {
+                rdp.Enabled, rdp.Hostname, rdp.AllowedEmails, rdp.MfaMethods, rdp.MfaSessionDuration,
+                rdp.ClipboardText, rdp.FileUpload, rdp.FileDownload,
+                Machines = rdp.Machines.Select(m => new { m.Name, m.Ip, m.Port }),
+            },
+        });
+    }
 
     public override void OnEnter()
     {
-        var routes = string.Join("\n", _state.Routes.Select(r => $"      https://{r.Hostname}  →  {r.Service}"));
-        _summary.Text =
-            $"網域：{_state.Domain}\n" +
-            $"Tunnel 名稱：{_state.TunnelName}\n" +
-            $"對外網址：\n{routes}";
+        var lines = new List<string>
+        {
+            $"網域：{_state.Domain}",
+            $"Tunnel 名稱：{_state.TunnelName}",
+        };
+        if (_state.Routes.Count > 0)
+        {
+            lines.Add("網站／API：");
+            lines.AddRange(_state.Routes.Select(r => $"      https://{r.Hostname}  →  {r.Service}"));
+        }
+        if (_state.Rdp is { Enabled: true } rdp)
+        {
+            lines.Add($"遠端桌面：https://{rdp.Hostname}");
+            lines.AddRange(rdp.Machines.Select(m => $"      {m.Name}  →  {m.Ip}:{m.Port}"));
+            lines.Add($"允許登入：{string.Join("、", rdp.AllowedEmails)}");
+            lines.Add($"2FA：{string.Join("、", rdp.MfaMethods.Select(RdpDeployer.MfaMethodName))}（{RdpDeployer.SessionName(rdp.MfaSessionDuration)}）");
+        }
+        else if (_state.Rdp is { Enabled: false, AppId: not null })
+        {
+            lines.Add("遠端桌面：停用（部署時會移除先前的遠端桌面設定）");
+        }
+        _summary.Text = string.Join("\n", lines);
 
         if (_state.Result is not null && !IsCurrentDeployed)
             _start.Text = "重新部署（設定已變更）";
@@ -75,15 +107,14 @@ sealed class DeployStep : StepPage
             MessageBox.Show(owner, q, "請確認", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
         var ok = false;
+        var config = _state.ToConfig();
         try
         {
-            var config = _state.ToConfig();
             using var cf = new CloudflareClient(_state.ApiToken);
             var result = await new Deployer(cf, _log, Confirm).DeployAsync(config);
 
             _log.Step("儲存設定");
             config.TunnelId = result.TunnelId;
-            _state.TunnelId = result.TunnelId;
             AppStorage.SaveConfig(config);
             if (_state.RememberToken) AppStorage.SaveToken(_state.ApiToken);
             else AppStorage.DeleteToken();
@@ -98,7 +129,6 @@ sealed class DeployStep : StepPage
             }
 
             _state.Result = result;
-            _deployedSignature = Signature();
             ok = true;
             _log.Info("");
             _log.Ok("全部完成！請按右下角「下一步」查看結果。");
@@ -117,10 +147,15 @@ sealed class DeployStep : StepPage
         }
         finally
         {
+            // 就算中途失敗，也把已建立資源的 ID 帶回來，重新部署時才會更新而不是重複建立
+            _state.TunnelId = config.TunnelId ?? _state.TunnelId;
+            _state.Rdp = config.Rdp?.Clone();
+            if (ok) _deployedSignature = Signature();
+
             _running = false;
             _progress.Visible = false;
             _start.Enabled = true;
-            _start.Text = ok ? "重新部署" : "重新部署";
+            _start.Text = "重新部署";
             NotifyStateChanged();
         }
     }
@@ -138,6 +173,13 @@ sealed class DeployStep : StepPage
         _log.Step("設定 DNS 紀錄");
         _log.Ok("www.yourdomain.com：已新增 DNS 紀錄");
         _log.Error("api.yourdomain.com：已有其他 DNS 紀錄（A 1.2.3.4）。為了安全不會自動覆寫。");
+        _log.Step("檢查 Zero Trust 設定（登入方式與 2FA）");
+        _log.Ok("Zero Trust 組織：yourteam.cloudflareaccess.com（Email 驗證碼登入、2FA 已啟用）");
+        _log.Step("設定私有網路路由");
+        _log.Ok("office-pc：已新增路由 192.168.10.20/32");
+        _log.Ok("accounting-pc：已新增路由 192.168.10.31/32");
+        _log.Step("設定登入政策與 2FA");
+        _log.Ok("2FA：Authenticator App、安全金鑰、生物辨識，每 8 小時重新驗證");
         _log.Step("安裝連線服務 cloudflared");
         _log.Info("下載中… 50%（18 MB）");
     }

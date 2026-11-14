@@ -26,7 +26,13 @@ sealed partial class ToolConfig
     public string? TunnelId { get; set; }
 
     public List<RouteConfig> Routes { get; set; } = [];
+
+    /// <summary>瀏覽器 RDP + 2FA；null 代表從未設定。</summary>
+    public RdpConfig? Rdp { get; set; }
+
     public string? CloudflaredPath { get; set; }
+
+    public bool RdpEnabled => Rdp is { Enabled: true };
 
     static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -65,8 +71,8 @@ sealed partial class ToolConfig
             throw new InvalidOperationException("請選擇網域。");
         if (!TunnelNamePattern().IsMatch(TunnelName))
             throw new InvalidOperationException("Tunnel 名稱只能使用英文、數字、- 和 _，且需以英文或數字開頭。");
-        if (Routes.Count == 0)
-            throw new InvalidOperationException("請至少設定一個對外網址。");
+        if (Routes.Count == 0 && !RdpEnabled)
+            throw new InvalidOperationException("請至少設定一個對外網址，或啟用遠端桌面。");
 
         var seen = new HashSet<string>();
         foreach (var r in Routes)
@@ -83,6 +89,15 @@ sealed partial class ToolConfig
             if (!Uri.TryCreate(r.Service, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
                 throw new InvalidOperationException($"{r.Hostname} 的本機服務位址必須是 http:// 或 https:// 開頭，目前是「{r.Service}」。");
+        }
+
+        if (RdpEnabled)
+        {
+            Rdp!.Validate(Domain);
+            if (!HostnamePattern().IsMatch(Rdp.Hostname))
+                throw new InvalidOperationException($"遠端桌面網址 {Rdp.Hostname} 格式不正確，子網域只能使用英文、數字和 -。");
+            if (seen.Contains(Rdp.Hostname))
+                throw new InvalidOperationException($"遠端桌面網址 {Rdp.Hostname} 和網站／API 的網址重複，請換一個子網域。");
         }
     }
 

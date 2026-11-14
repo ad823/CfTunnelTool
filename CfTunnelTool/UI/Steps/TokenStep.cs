@@ -16,7 +16,7 @@ sealed class TokenStep : StepPage
     bool _loading;
 
     public override string SidebarTitle => "API Token";
-    public override string Heading => "步驟 1／4　建立 Cloudflare API Token";
+    public override string Heading => "步驟 1／5　建立 Cloudflare API Token";
     public override bool CanGoNext => _state.TokenVerified && !_verifying;
     public override bool IsBusy => _verifying;
 
@@ -31,7 +31,7 @@ sealed class TokenStep : StepPage
             "1.  按下方「開啟 Cloudflare Token 頁面」，並登入 Cloudflare\n" +
             "2.  按「Create Token」，捲到最下方「Create Custom Token」，按「Get started」\n" +
             "3.  Token name 填：CfTunnelTool\n" +
-            "4.  在 Permissions 依下表設定三列權限（按「+ Add more」新增一列）\n" +
+            "4.  在 Permissions 依下表設定權限（按「+ Add more」新增一列）；只用網站／API 設前三列即可，要用遠端桌面再加後三列\n" +
             "5.  Zone Resources 選「Include → Specific zone → 你的網域」\n" +
             "6.  按「Continue to summary」→「Create Token」，把顯示的 Token 複製後貼到下方");
 
@@ -78,33 +78,40 @@ sealed class TokenStep : StepPage
     {
         string[,] rows =
         {
-            { "類型（左欄）", "權限項目（中欄）", "權限層級（右欄）" },
-            { "Account", "Cloudflare Tunnel", "Edit" },
-            { "Zone", "DNS", "Edit" },
-            { "Zone", "Zone", "Read" },
+            { "類型", "權限項目", "層級", "用途" },
+            { "Account", "Cloudflare Tunnel", "Edit", "必要" },
+            { "Zone", "DNS", "Edit", "必要" },
+            { "Zone", "Zone", "Read", "必要" },
+            { "Account", "Access: Apps and Policies", "Edit", "遠端桌面" },
+            { "Account", "Access: Organizations, Identity Providers, and Groups", "Edit", "遠端桌面" },
+            { "Account", "Zero Trust", "Edit", "遠端桌面" },
         };
+        int rowCount = rows.GetLength(0), colCount = rows.GetLength(1);
         var table = new TableLayoutPanel
         {
-            ColumnCount = 3,
-            RowCount = 4,
+            ColumnCount = colCount,
+            RowCount = rowCount,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
             BackColor = Color.White,
             Margin = new Padding(0, 0, 0, 8),
         };
-        for (int r = 0; r < 4; r++)
-        for (int c = 0; c < 3; c++)
+        for (int r = 0; r < rowCount; r++)
+        for (int c = 0; c < colCount; c++)
         {
+            var optional = r > 0 && rows[r, 3] != "必要";
             table.Controls.Add(new Label
             {
                 Text = rows[r, c],
                 AutoSize = true,
                 Dock = DockStyle.Fill,
-                Font = r == 0 ? Theme.Bold : (c == 2 ? Theme.Bold : Theme.Base),
-                ForeColor = r > 0 && c == 2 ? Theme.AccentDark : Theme.Text,
+                Font = r == 0 || c == 2 ? Theme.Bold : Theme.Base,
+                ForeColor = r == 0 ? Theme.Text
+                    : c == 2 ? Theme.AccentDark
+                    : c == 3 || optional ? Theme.Muted : Theme.Text,
                 BackColor = r == 0 ? Theme.Surface : Color.White,
-                Padding = new Padding(12, 5, 24, 5),
+                Padding = new Padding(10, 5, 14, 5),
                 Margin = new Padding(0),
             }, c, r);
         }

@@ -51,6 +51,13 @@ abstract class StepPage : UserControl
     /// <summary>按「下一步」時呼叫，回傳 false 可阻止離開（例如驗證失敗）。</summary>
     public virtual bool OnNext() => true;
 
+#if DEBUG
+    internal void ScrollToEnd()
+    {
+        _scroller.AutoScrollPosition = new Point(0, _scroller.DisplayRectangle.Height);
+    }
+#endif
+
     // ---------- 版面輔助 ----------
 
     protected T Add<T>(T control, bool stretch = true, bool fill = false) where T : Control

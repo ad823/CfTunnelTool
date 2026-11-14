@@ -18,6 +18,11 @@ static class Program
             ScreenshotRunner.Run(args[1]);
             return 0;
         }
+        if (args.Length >= 2 && args[0] == "--selftest")
+        {
+            SelfTest.Run(args[1]);
+            return 0;
+        }
 #endif
 
         // 正式版的 manifest 已要求系統管理員權限；這裡是保險（例如開發模式執行）
