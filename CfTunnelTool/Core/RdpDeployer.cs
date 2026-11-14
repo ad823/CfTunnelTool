@@ -236,14 +236,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         await WithPermission(PermZeroTrust, () => cf.EnableGatewayProxyAsync(acc));
         log.Ok("已開啟 Gateway 代理（TCP／UDP）");
 
-        // 誰可以把電腦註冊到組織：沿用 App Launcher 的政策（同一批 Email）
-        await WithPermission(PermApps, () => EnsureWarpEnrollAsync(acc, rdp));
-
-        // Split Tunnel：讓要連的電腦 IP 走 WARP
-        await WithPermission(PermZeroTrust, () => EnsureSplitTunnelAsync(acc, rdp));
-
-        // 連線前 2FA：私有網路應用程式
-        log.Step("設定 WARP 連線的登入政策與 2FA");
+        // WARP 政策（Email ＋ 2FA）：註冊裝置與連線前都使用
+        log.Step("設定 WARP 的登入政策與 2FA");
         var policyName = $"CfTunnelTool WARP RDP - {config.TunnelName}";
         var appName = $"遠端桌面 WARP - {config.TunnelName}";
         await WithPermission(PermApps, async () =>
@@ -252,56 +246,116 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
                 await cf.UpdateWarpPolicyAsync(acc, rdp.WarpPolicyId, policyName, rdp);
             else
                 rdp.WarpPolicyId = await cf.CreateWarpPolicyAsync(acc, policyName, rdp);
+        });
 
+        // 誰可以把電腦註冊到組織：同一批 Email，而且要通過 2FA
+        await WithPermission(PermApps, () => EnsureWarpEnrollAsync(acc, rdp));
+
+        // Split Tunnel：讓要連的電腦 IP 走 WARP
+        await WithPermission(PermZeroTrust, () => EnsureSplitTunnelAsync(acc, rdp));
+
+        // 連線前 2FA：私有網路應用程式
+        var warpPolicyId = rdp.WarpPolicyId!;
+        await WithPermission(PermApps, async () =>
+        {
             if (rdp.WarpAppId is not null && await cf.AppExistsAsync(acc, rdp.WarpAppId))
-                await cf.UpdatePrivateRdpAppAsync(acc, rdp.WarpAppId, appName, rdp, rdp.WarpPolicyId);
+                await cf.UpdatePrivateRdpAppAsync(acc, rdp.WarpAppId, appName, rdp, warpPolicyId);
             else
-                rdp.WarpAppId = await cf.CreatePrivateRdpAppAsync(acc, appName, rdp, rdp.WarpPolicyId);
+                rdp.WarpAppId = await cf.CreatePrivateRdpAppAsync(acc, appName, rdp, warpPolicyId);
         });
         log.Ok("WARP 遠端桌面已設定：" + string.Join("、", rdp.Machines.Select(m => $"{m.Name} {m.Ip}:{m.Port}")));
         log.Info($"WARP 組織名稱：{rdp.TeamName}");
     }
 
+    /// <summary>
+    /// WARP 裝置註冊權限：使用 WARP 政策（Email ＋ 2FA），註冊裝置也要通過 2FA。
+    /// Cloudflare 不接受時退回 App Launcher 政策（只檢查 Email）並提醒。
+    /// 舊版會把 App Launcher 政策加到註冊權限，這裡會把它換掉。
+    /// </summary>
     async Task EnsureWarpEnrollAsync(string acc, RdpConfig rdp)
     {
-        if (rdp.LauncherPolicyId is null)
+        try
         {
-            log.Warn("沒有可用的註冊政策，請到 Zero Trust → Team & Resources → Devices → " +
-                     "Device enrollment permissions 確認允許這些 Email 註冊：" + string.Join("、", rdp.AllowedEmails));
+            await EnsureWarpEnrollWithPolicyAsync(acc, rdp, rdp.WarpPolicyId!);
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            log.Warn("無法在 WARP 註冊權限要求 2FA，改為只檢查 Email（連線到電腦時仍要 2FA）。");
+            log.Info(ex.Message);
+            string? fallbackError = "沒有 App Launcher 政策可以使用";
+            if (rdp.LauncherPolicyId is not null)
+            {
+                try
+                {
+                    await EnsureWarpEnrollWithPolicyAsync(acc, rdp, rdp.LauncherPolicyId);
+                    fallbackError = null;
+                }
+                catch (CloudflareApiException ex2) when (!ex2.IsForbidden) { fallbackError = ex2.Message; }
+            }
+            if (fallbackError is not null)
+            {
+                log.Warn("無法自動設定 WARP 註冊權限，請到 Zero Trust → Team & Resources → Devices → " +
+                         "Device enrollment permissions 確認允許這些 Email：" + string.Join("、", rdp.AllowedEmails));
+                log.Info(fallbackError);
+            }
             return;
         }
 
+        // 舊版加入的 App Launcher 政策（不要求 2FA）：任何一條政策符合就能註冊，有了 2FA 政策後要移除
+        if (rdp.WarpEnrollAppId is { } appId && rdp.LauncherPolicyId is { } launcher &&
+            (await cf.GetAppPolicyIdsAsync(acc, appId)).Contains(launcher))
+        {
+            await cf.DetachPolicyAsync(acc, appId, launcher);
+            log.Ok("WARP 註冊權限已改為要求 2FA（移除舊版不需 2FA 的政策）");
+        }
+        else
+        {
+            log.Ok("WARP 註冊權限：允許的 Email 註冊裝置時也要通過 2FA");
+        }
+
+        await WarnOtherEnrollPoliciesAsync(acc, rdp);
+    }
+
+    async Task EnsureWarpEnrollWithPolicyAsync(string acc, RdpConfig rdp, string policyId)
+    {
         // 已記錄的應用程式（自己建立的，或之前加入的共用應用程式）：確保本地點的政策在裡面，保留其他地點的政策
         if (rdp.WarpEnrollAppId is not null && await cf.AppExistsAsync(acc, rdp.WarpEnrollAppId))
         {
-            await cf.AttachPolicyAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId);
-            log.Ok("WARP 註冊權限已更新");
+            await cf.AttachPolicyAsync(acc, rdp.WarpEnrollAppId, policyId);
             return;
         }
 
         var existing = await cf.FindAppIdByTypeAsync(acc, "warp");
         if (existing is null)
         {
-            rdp.WarpEnrollAppId = await cf.CreateWarpEnrollAppAsync(acc, rdp.LauncherPolicyId);
+            rdp.WarpEnrollAppId = await cf.CreateWarpEnrollAppAsync(acc, policyId);
             rdp.WarpEnrollOwned = true;
-            log.Ok("已設定 WARP 註冊權限（允許的 Email 才能註冊）");
             return;
         }
 
-        // 帳號已經有 WARP 註冊設定（其他地點或手動建立的）：把本地點的 Email 加進去，不影響原本的設定
-        try
-        {
-            await cf.AttachPolicyAsync(acc, existing, rdp.LauncherPolicyId);
-            rdp.WarpEnrollAppId = existing;
-            rdp.WarpEnrollOwned = false;
-            log.Ok("已把本地點允許的 Email 加入現有的 WARP 註冊權限（與其他地點共用）");
-        }
-        catch (CloudflareApiException ex) when (!ex.IsForbidden)
-        {
-            log.Warn("無法自動加入現有的 WARP 註冊權限，請到 Zero Trust → Team & Resources → Devices → " +
-                     "Device enrollment permissions 確認允許這些 Email：" + string.Join("、", rdp.AllowedEmails));
-            log.Info(ex.Message);
-        }
+        // 帳號已經有 WARP 註冊設定（其他地點或手動建立的）：把本地點的政策加進去，不影響原本的設定
+        await cf.AttachPolicyAsync(acc, existing, policyId);
+        rdp.WarpEnrollAppId = existing;
+        rdp.WarpEnrollOwned = false;
+        log.Ok("已把本地點的政策加入現有的 WARP 註冊權限（與其他地點共用）");
+    }
+
+    /// <summary>
+    /// 註冊權限裡其他地點（或手動建立）的政策若不要求 2FA，那些 Email 仍可不經 2FA 註冊裝置：只提醒，不修改。
+    /// </summary>
+    async Task WarnOtherEnrollPoliciesAsync(string acc, RdpConfig rdp)
+    {
+        if (rdp.WarpEnrollAppId is not { } appId) return;
+        List<string> ids;
+        try { ids = await cf.GetAppPolicyIdsAsync(acc, appId); }
+        catch (CloudflareApiException) { return; }
+
+        var weak = 0;
+        foreach (var id in ids.Where(id => id != rdp.WarpPolicyId))
+            if (await cf.PolicyRequiresMfaAsync(acc, id) != true) weak++;
+        if (weak > 0)
+            log.Warn($"WARP 註冊權限裡還有 {weak} 條政策不要求 2FA（可能是其他地點用舊版部署，或手動建立）。" +
+                     "請用新版重新部署其他地點，或到 Zero Trust → Team & Resources → Devices → Device enrollment permissions 檢查。");
     }
 
     /// <summary>
@@ -368,9 +422,10 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         if (rdp.WarpAppId is null && rdp.WarpPolicyId is null && rdp.WarpEnrollAppId is null) return;
         log.Step("移除 WARP 遠端桌面設定");
         if (rdp.WarpAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpAppId)) log.Ok("已刪除 WARP 遠端桌面應用程式");
-        if (rdp.WarpPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.WarpPolicyId)) log.Ok("已刪除 WARP 登入政策");
+        // 註冊權限使用 WARP 政策（舊版是 App Launcher 政策），先從註冊權限移除，政策才刪得掉
         if (rdp.WarpEnrollAppId is not null)
-            await ReleaseSharedAppAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId, rdp.WarpEnrollOwned, "WARP 註冊權限");
+            await ReleaseSharedAppAsync(acc, rdp.WarpEnrollAppId, [rdp.WarpPolicyId, rdp.LauncherPolicyId], rdp.WarpEnrollOwned, "WARP 註冊權限");
+        if (rdp.WarpPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.WarpPolicyId)) log.Ok("已刪除 WARP 登入政策");
         rdp.WarpAppId = rdp.WarpPolicyId = rdp.WarpEnrollAppId = null;
         rdp.WarpEnrollOwned = true;
         log.Info("Split Tunnel 中讓電腦 IP 走 WARP 的設定保留不動（不影響其他使用者）。");
@@ -473,9 +528,13 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     /// 從共用的應用程式（App Launcher、WARP 註冊權限）移除本地點的政策。
     /// 是自己建立的、而且已經沒有其他地點的政策時，才刪除整個應用程式。
     /// </summary>
-    async Task ReleaseSharedAppAsync(string acc, string appId, string? policyId, bool owned, string label)
+    Task ReleaseSharedAppAsync(string acc, string appId, string? policyId, bool owned, string label)
+        => ReleaseSharedAppAsync(acc, appId, [policyId], owned, label);
+
+    async Task ReleaseSharedAppAsync(string acc, string appId, string?[] policyIds, bool owned, string label)
     {
-        var remaining = policyId is null ? 0 : await cf.DetachPolicyAsync(acc, appId, policyId);
+        var ids = policyIds.Where(id => id is not null).ToList();
+        var remaining = ids.Count == 0 ? 0 : await cf.DetachPoliciesAsync(acc, appId, ids);
         if (owned && remaining == 0)
         {
             if (await cf.DeleteAppAsync(acc, appId)) log.Ok($"已刪除{label}");
@@ -622,7 +681,7 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     public async Task RemoveAsync(RdpConfig rdp, ZoneInfo zone)
     {
         var acc = zone.AccountId;
-        // WARP 的註冊權限應用程式沿用 App Launcher 政策，要先刪
+        // WARP 的註冊權限可能還掛著 App Launcher 政策（舊版），要先移除
         await RemoveWarpAsync(rdp, acc);
         log.Step("移除遠端桌面設定");
         if (rdp.AppId is not null && await cf.DeleteAppAsync(acc, rdp.AppId))

@@ -312,7 +312,10 @@ sealed partial class CloudflareClient
         => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", WarpEnrollBody(policyId)))!["id"]!.GetValue<string>();
 
 
-    /// <summary>WARP 連線政策：同一批 Email ＋ 2FA（沒有瀏覽器 RDP 的剪貼簿規則）。</summary>
+    /// <summary>
+    /// WARP 政策：同一批 Email ＋ 2FA（沒有瀏覽器 RDP 的剪貼簿規則）。
+    /// 同時用在「私有網路應用程式」（連線前 2FA）與「WARP 裝置註冊權限」（註冊裝置也要 2FA）。
+    /// </summary>
     internal static object WarpPolicyBody(string name, RdpConfig rdp) => new
     {
         name,
@@ -414,15 +417,35 @@ sealed partial class CloudflareClient
     /// 從應用程式移除政策，回傳剩下的政策數。
     /// 移除後會變成沒有任何政策時不更新（由呼叫端決定要不要刪除整個應用程式）。
     /// </summary>
-    public async Task<int> DetachPolicyAsync(string accountId, string appId, string policyId)
+    public Task<int> DetachPolicyAsync(string accountId, string appId, string policyId)
+        => DetachPoliciesAsync(accountId, appId, [policyId]);
+
+    /// <summary>從應用程式移除多個政策（規則同 <see cref="DetachPolicyAsync"/>），回傳剩下的政策數。</summary>
+    public async Task<int> DetachPoliciesAsync(string accountId, string appId, IEnumerable<string?> policyIds)
     {
         List<string> ids;
         try { ids = await GetAppPolicyIdsAsync(accountId, appId); }
         catch (CloudflareApiException ex) when (ex.IsNotFound) { return 0; }
-        if (!ids.Remove(policyId)) return ids.Count;
-        if (ids.Count > 0) await SetAppPoliciesAsync(accountId, appId, ids);
+        var removed = ids.RemoveAll(id => policyIds.Contains(id));
+        if (removed > 0 && ids.Count > 0) await SetAppPoliciesAsync(accountId, appId, ids);
         return ids.Count;
     }
+
+    /// <summary>政策是否要求獨立 MFA（政策本身有 mfa_config 且沒有停用）。讀不到時回傳 null。</summary>
+    public async Task<bool?> PolicyRequiresMfaAsync(string accountId, string policyId)
+    {
+        try
+        {
+            var p = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/access/policies/{policyId}");
+            return PolicyRequiresMfa(p);
+        }
+        catch (CloudflareApiException) { return null; }
+    }
+
+    internal static bool PolicyRequiresMfa(JsonNode? policy)
+        => policy?["mfa_config"] is JsonObject mfa
+           && mfa["mfa_disabled"]?.GetValue<bool>() != true
+           && mfa["allowed_authenticators"] is JsonArray { Count: > 0 };
 
     // ---------- App Launcher（使用者註冊 2FA 裝置的入口） ----------
 
