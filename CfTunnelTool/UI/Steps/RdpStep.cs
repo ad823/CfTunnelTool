@@ -393,7 +393,7 @@ sealed partial class RdpStep : StepPage
             if (thisIp is not null && rdp.Machines.Any(m => m.Ip == thisIp) && !host.Enabled && !host.IsHomeEdition)
             {
                 var answer = MessageBox.Show(FindForm(),
-                    "清單中包含這台電腦，但這台電腦還沒有啟用遠端桌面。\n\n要現在啟用嗎？（會同時開放 Windows 防火牆的遠端桌面規則）",
+                    "清單中包含這台電腦，但這台電腦還沒有啟用遠端桌面。\n\n要現在啟用嗎？（會同時開放 Windows 防火牆的遠端桌面規則，只允許內部網路連線）",
                     "啟用遠端桌面", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
                 if (answer == DialogResult.Cancel) return false;
                 if (answer == DialogResult.Yes)
