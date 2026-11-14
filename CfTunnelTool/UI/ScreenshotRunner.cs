@@ -81,11 +81,29 @@ static class ScreenshotRunner
         Pump(500);
         Capture(prompt, Path.Combine(dir, "token-prompt.png"));
         prompt.Close();
+
+        var chooser = new ModeChooserForm { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
+        chooser.Show();
+        Pump(500);
+        Capture(chooser, Path.Combine(dir, "mode-chooser.png"));
+        chooser.Close();
+
+        var client = new ClientForm(ClientConfig.FromRdp(DemoRdp()), demo: true)
+        {
+            StartPosition = FormStartPosition.Manual,
+            Location = new Point(30, 30),
+            TopMost = true,
+        };
+        client.Show();
+        Pump(1500);
+        Capture(client, Path.Combine(dir, "client.png"));
+        client.Close();
     }
 
     static RdpConfig DemoRdp() => new()
     {
         Enabled = true,
+        WarpEnabled = true,
         Hostname = "rdp.yourdomain.com",
         AllowedEmails = ["alice@yourdomain.com", "@yourdomain.com"],
         VnetId = "a1b2c3d4-0000-4000-8000-000000000000",

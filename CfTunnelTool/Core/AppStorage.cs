@@ -23,6 +23,18 @@ static class AppStorage
 
     public static void SaveConfig(ToolConfig config) => config.Save(ConfigPath);
 
+    // ---- 使用者模式（連到公司電腦的那一端） ----
+    static string ClientPath => Path.Combine(Dir, "client.json");
+
+    public static ClientConfig? LoadClient() => ClientConfig.Load(ClientPath);
+
+    public static void SaveClient(ClientConfig client) => client.Save(ClientPath);
+
+    public static void DeleteClient()
+    {
+        if (File.Exists(ClientPath)) File.Delete(ClientPath);
+    }
+
     public static void SaveToken(string token)
     {
         Directory.CreateDirectory(Dir);

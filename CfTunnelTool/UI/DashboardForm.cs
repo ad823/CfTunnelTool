@@ -160,11 +160,13 @@ sealed class DashboardForm : Form
         {
             foreach (var m in _config.Rdp!.Machines)
             {
-                var item = new ListViewItem($"{m.Name}（https://{_config.Rdp.Hostname}）", _rdpGroup)
+                var modes = string.Join("＋", new[] { _config.Rdp.WarpEnabled ? "WARP" : null, _config.Rdp.BrowserEnabled ? "瀏覽器" : null }
+                    .Where(x => x is not null));
+                var item = new ListViewItem($"{m.Name}（{modes}）", _rdpGroup)
                 {
                     Tag = m,
                     UseItemStyleForSubItems = false,
-                    ToolTipText = _config.Rdp.UrlFor(m),
+                    ToolTipText = _config.Rdp.BrowserEnabled ? _config.Rdp.UrlFor(m) : "WARP：用遠端桌面連線（mstsc）連 " + m.Ip,
                 };
                 item.SubItems.Add($"RDP {m.Ip}:{m.Port}");
                 item.SubItems.Add("—");
@@ -213,7 +215,13 @@ sealed class DashboardForm : Form
         if (_routes.SelectedItems.Count == 0 && _routes.Items.Count > 0) _routes.Items[0].Selected = true;
         if (_routes.SelectedItems.Count == 0) return;
         var item = _routes.SelectedItems[0];
-        Theme.OpenUrl(item.Tag is RdpMachine m && _config.Rdp is { } rdp ? rdp.UrlFor(m) : item.Text);
+        if (item.Tag is RdpMachine m && _config.Rdp is { } rdp)
+        {
+            if (rdp.BrowserEnabled) Theme.OpenUrl(rdp.UrlFor(m));
+            else WarpClient.OpenRdp(new ClientMachine { Name = m.Name, Ip = m.Ip, Port = m.Port }); // 區網內直接用 mstsc 測試
+            return;
+        }
+        Theme.OpenUrl(item.Text);
     }
 
     void SetBusy(bool busy)

@@ -5,6 +5,7 @@ namespace CfTunnelTool.Core;
 record AccessOrganization(string AuthDomain, JsonObject Raw);
 record TeamnetRoute(string Id, string Network, string TunnelId, string? VnetId);
 record InfraTarget(string Id, string Hostname, string? Ip);
+record SplitTunnelEntry(string? Address, string? Host, string? Description);
 
 /// <summary>
 /// Zero Trust（Access、私有網路路由、基礎架構目標）相關 API，供瀏覽器 RDP 使用。
@@ -231,6 +232,98 @@ sealed partial class CloudflareClient
 
     public async Task UpdateLauncherPolicyAsync(string accountId, string policyId, string name, RdpConfig rdp)
         => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/policies/{policyId}", LauncherPolicyBody(name, rdp));
+
+    // ---------- WARP：Gateway 代理、Split Tunnel、裝置註冊、私有網路應用程式 ----------
+
+    /// <summary>開啟 Gateway 的 TCP／UDP 代理（WARP 連私有網路必須）。PATCH 只改這兩項。</summary>
+    public async Task EnableGatewayProxyAsync(string accountId)
+        => await SendAsync(HttpMethod.Patch, $"accounts/{accountId}/devices/settings",
+            new { gateway_proxy_enabled = true, gateway_udp_proxy_enabled = true });
+
+    /// <summary>預設 WARP 設定檔的 Split Tunnel；有 include 清單就是 Include 模式，否則是 Exclude 模式。</summary>
+    public async Task<(string Mode, List<SplitTunnelEntry> Entries)> GetSplitTunnelAsync(string accountId)
+    {
+        var policy = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/devices/policy");
+        static List<SplitTunnelEntry> Parse(JsonNode? arr) => arr?.AsArray()
+            .Where(e => e is not null)
+            .Select(e => new SplitTunnelEntry(e!["address"]?.ToString(), e["host"]?.ToString(), e["description"]?.ToString()))
+            .ToList() ?? [];
+        var include = Parse(policy?["include"]);
+        return include.Count > 0 ? ("include", include) : ("exclude", Parse(policy?["exclude"]));
+    }
+
+    public async Task PutSplitTunnelAsync(string accountId, string mode, List<SplitTunnelEntry> entries)
+    {
+        var body = entries.Select(e => e.Address is not null
+            ? (object)new { address = e.Address, description = e.Description ?? "" }
+            : new { host = e.Host, description = e.Description ?? "" }).ToList();
+        await SendAsync(HttpMethod.Put, $"accounts/{accountId}/devices/policy/{mode}", body);
+    }
+
+    /// <summary>找出指定類型的 Access 應用程式（例如 warp、app_launcher，每個帳號最多一個）。</summary>
+    public async Task<string?> FindAppIdByTypeAsync(string accountId, string type)
+    {
+        var list = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/access/apps");
+        return list?.AsArray().FirstOrDefault(a => a?["type"]?.GetValue<string>() == type)?["id"]?.GetValue<string>();
+    }
+
+    static object WarpEnrollBody(string policyId) => new
+    {
+        type = "warp",
+        name = "Warp Login App",
+        policies = new[] { new { id = policyId, precedence = 1 } },
+        session_duration = "24h",
+    };
+
+    public async Task<string> CreateWarpEnrollAppAsync(string accountId, string policyId)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", WarpEnrollBody(policyId)))!["id"]!.GetValue<string>();
+
+    public async Task UpdateWarpEnrollAppAsync(string accountId, string appId, string policyId)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", WarpEnrollBody(policyId));
+
+    /// <summary>WARP 連線政策：同一批 Email ＋ 2FA（沒有瀏覽器 RDP 的剪貼簿規則）。</summary>
+    internal static object WarpPolicyBody(string name, RdpConfig rdp) => new
+    {
+        name,
+        decision = "allow",
+        include = EmailIncludes(rdp),
+        mfa_config = new
+        {
+            mfa_disabled = false,
+            allowed_authenticators = rdp.MfaMethods,
+            session_duration = rdp.MfaSessionDuration,
+        },
+    };
+
+    public async Task<string> CreateWarpPolicyAsync(string accountId, string name, RdpConfig rdp)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/policies", WarpPolicyBody(name, rdp)))!["id"]!.GetValue<string>();
+
+    public async Task UpdateWarpPolicyAsync(string accountId, string policyId, string name, RdpConfig rdp)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/policies/{policyId}", WarpPolicyBody(name, rdp));
+
+    /// <summary>私有網路應用程式：每台電腦一個 IP/32 ＋ RDP 連接埠，透過 WARP 連線前要通過 Access 與 2FA。</summary>
+    internal static object PrivateRdpAppBody(string name, RdpConfig rdp, string policyId) => new
+    {
+        name,
+        type = "self_hosted",
+        destinations = rdp.Machines.Select(m => new
+        {
+            type = "private",
+            cidr = $"{m.Ip}/32",
+            port_range = m.Port.ToString(),
+            l4_protocol = "tcp",
+            vnet_id = rdp.VnetId,
+        }).ToArray(),
+        policies = new[] { new { id = policyId, precedence = 1 } },
+        session_duration = rdp.MfaSessionDuration == "0m" ? "1h" : rdp.MfaSessionDuration,
+        app_launcher_visible = false,
+    };
+
+    public async Task<string> CreatePrivateRdpAppAsync(string accountId, string name, RdpConfig rdp, string policyId)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", PrivateRdpAppBody(name, rdp, policyId)))!["id"]!.GetValue<string>();
+
+    public async Task UpdatePrivateRdpAppAsync(string accountId, string appId, string name, RdpConfig rdp, string policyId)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", PrivateRdpAppBody(name, rdp, policyId));
 
     // ---------- App Launcher（使用者註冊 2FA 裝置的入口） ----------
 

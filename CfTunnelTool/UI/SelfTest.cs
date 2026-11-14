@@ -113,6 +113,66 @@ static class SelfTest
         RdpDeployer.CarryOverIds(cur2, prev2);
         Check("CarryOverIds 帶入 App Launcher ID", cur2.LauncherAppId == "la" && cur2.LauncherPolicyId == "lp");
 
+        // ---- CIDR 相減（WARP Split Tunnel） ----
+        Cidr.TryParse("192.168.0.0/16", out var lan);
+        Cidr.TryParse("192.168.5.200", out var host);
+        var pieces = lan.Subtract(host);
+        var hostIp = host.Network;
+        Check("CIDR：/16 減 /32 得到 16 段", pieces.Count == 16, string.Join(" ", pieces.Take(4)) + " …");
+        Check("CIDR：結果不包含該 IP", pieces.All(p => !p.Contains(hostIp)));
+        Check("CIDR：結果都在原網段內", pieces.All(lan.Contains));
+        var total = pieces.Sum(p => Math.Pow(2, 32 - p.Prefix)) + 1;
+        Check("CIDR：數量加起來等於原網段", Math.Abs(total - Math.Pow(2, 16)) < 0.5, $"{total}");
+        Cidr.TryParse("10.0.0.0/8", out var other);
+        Check("CIDR：不包含時原樣回傳", other.Subtract(host) is [var only] && only == other);
+
+        // ---- 連線方式與舊設定檔相容 ----
+        var oldJson = "{\"Enabled\":true,\"Hostname\":\"rdp.example.com\",\"AllowedEmails\":[\"a@example.com\"],\"Machines\":[{\"Name\":\"pc1\",\"Ip\":\"192.168.1.10\"}]}";
+        var oldCfg = JsonSerializer.Deserialize<RdpConfig>(oldJson)!;
+        Check("舊設定檔沒有 BrowserEnabled 時為 true", oldCfg.BrowserEnabled && !oldCfg.WarpEnabled);
+        Throws("兩種連線方式都沒勾 → 錯誤", () => { var r = Good(); r.BrowserEnabled = false; r.WarpEnabled = false; Cfg(r).Validate(); }, "連線方式");
+        try
+        {
+            var r = Good(); r.BrowserEnabled = false; r.WarpEnabled = true; r.Hostname = "";
+            Cfg(r).Validate();
+            Check("只用 WARP 時不需要瀏覽器網址", true);
+        }
+        catch (InvalidOperationException ex) { Check("只用 WARP 時不需要瀏覽器網址", false, ex.Message); }
+
+        // ---- 連線代碼 ----
+        var codeSrc = Good();
+        codeSrc.AuthDomain = "myteam.cloudflareaccess.com";
+        var code = ClientConfig.FromRdp(codeSrc).ToCode();
+        var parsed = ClientConfig.TryParse("前面的說明文字\n  連線代碼：" + code + "\n後面的文字");
+        Check("連線代碼：TeamName 取自 AuthDomain", codeSrc.TeamName == "myteam");
+        Check("連線代碼：可從整段文字中解析", parsed is not null && parsed.Team == "myteam" && parsed.Machines.Count == 2
+                                       && parsed.Machines[1].Ip == "192.168.1.11" && parsed.Machines[1].Port == 3390, code);
+        Check("連線代碼：無效代碼回傳 null", ClientConfig.TryParse("CFT1:not-base64!!") is null && ClientConfig.TryParse("hello") is null);
+
+        // ---- .rdp 檔 ----
+        var rdpFile = WarpClient.RdpFileContent(new ClientMachine { Name = "pc", Ip = "192.168.1.10", Port = 3389 });
+        Check(".rdp：位址與詢問帳密", rdpFile.Contains("full address:s:192.168.1.10:3389") && rdpFile.Contains("prompt for credentials:i:1"));
+
+        // ---- WARP 的 JSON ----
+        codeSrc.VnetId = "vnet1";
+        var warpPolicyJson = JsonSerializer.Serialize(CloudflareClient.WarpPolicyBody("w", codeSrc));
+        var privateAppJson = JsonSerializer.Serialize(CloudflareClient.PrivateRdpAppBody("a", codeSrc, "POL"));
+        sb.AppendLine("INFO  WarpPolicyBody = " + warpPolicyJson);
+        sb.AppendLine("INFO  PrivateRdpAppBody = " + privateAppJson);
+        Check("WARP 政策：有 mfa_config、沒有 connection_rules", warpPolicyJson.Contains("\"mfa_config\"") && !warpPolicyJson.Contains("connection_rules"));
+        Check("WARP 應用程式：private destination", privateAppJson.Contains("\"type\":\"private\",\"cidr\":\"192.168.1.10/32\",\"port_range\":\"3389\",\"l4_protocol\":\"tcp\",\"vnet_id\":\"vnet1\""));
+
+        // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
+        try
+        {
+            using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true }) { Timeout = TimeSpan.FromSeconds(20) };
+            using var req = new HttpRequestMessage(HttpMethod.Head, WarpClient.DownloadUrl);
+            using var resp = http.Send(req);
+            var name = resp.Content.Headers.ContentDisposition?.FileName?.Trim('"') ?? "";
+            Check("WARP 下載網址回應 200 且為 .msi", resp.IsSuccessStatusCode && name.EndsWith(".msi"), $"{(int)resp.StatusCode} {name}");
+        }
+        catch (HttpRequestException ex) { Check("WARP 下載網址回應 200 且為 .msi", false, ex.Message); }
+
         // ---- 無效 Token 呼叫新 API ----
         using (var cf = new CloudflareClient("invalid-token-selftest"))
         {

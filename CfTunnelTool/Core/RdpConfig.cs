@@ -30,6 +30,15 @@ sealed partial class RdpConfig
     /// <summary>停用時保留這份設定，部署時才知道要清掉哪些 Cloudflare 資源。</summary>
     public bool Enabled { get; set; }
 
+    /// <summary>瀏覽器 RDP（免安裝）。舊版設定檔沒有這個欄位，讀進來維持 true。</summary>
+    public bool BrowserEnabled { get; set; } = true;
+
+    /// <summary>WARP ＋ Windows 遠端桌面連線（使用者需安裝 WARP，最流暢）。</summary>
+    public bool WarpEnabled { get; set; }
+
+    public bool UsesBrowser => Enabled && BrowserEnabled;
+    public bool UsesWarp => Enabled && WarpEnabled;
+
     /// <summary>瀏覽器 RDP 的網址，例如 rdp.example.com</summary>
     public string Hostname { get; set; } = "";
 
@@ -57,8 +66,16 @@ sealed partial class RdpConfig
     public string? LauncherAppId { get; set; }
     public string? LauncherPolicyId { get; set; }
 
+    /// <summary>WARP 模式：私有網路應用程式（連線前 2FA）與其政策、裝置註冊權限應用程式（只記錄本工具建立的）。</summary>
+    public string? WarpAppId { get; set; }
+    public string? WarpPolicyId { get; set; }
+    public string? WarpEnrollAppId { get; set; }
+
     /// <summary>Zero Trust 組織網域，例如 myteam.cloudflareaccess.com，用來組 2FA 註冊網址。</summary>
     public string? AuthDomain { get; set; }
+
+    /// <summary>WARP 組織名稱（team name），例如 myteam。</summary>
+    public string? TeamName => string.IsNullOrEmpty(AuthDomain) ? null : AuthDomain.Split('.')[0];
 
     public string? MfaEnrollUrl => string.IsNullOrEmpty(AuthDomain) ? null : $"https://{AuthDomain}/AddMfaDevice";
 
@@ -85,7 +102,9 @@ sealed partial class RdpConfig
         AllowedEmails = AllowedEmails.Select(e => e.Trim().ToLowerInvariant()).Where(e => e.Length > 0).Distinct().ToList();
         MfaMethods = MfaMethods.Where(AllMfaMethods.Contains).Distinct().ToList();
 
-        if (Hostname != domain && !Hostname.EndsWith("." + domain))
+        if (!BrowserEnabled && !WarpEnabled)
+            throw new InvalidOperationException("請至少勾選一種連線方式（瀏覽器，或 WARP ＋ 遠端桌面連線）。");
+        if (BrowserEnabled && Hostname != domain && !Hostname.EndsWith("." + domain))
             throw new InvalidOperationException($"遠端桌面網址 {Hostname} 不屬於網域 {domain}。");
         if (Machines.Count == 0)
             throw new InvalidOperationException("請至少加入一台要開放遠端桌面的電腦。");

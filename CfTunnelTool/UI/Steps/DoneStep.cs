@@ -104,11 +104,20 @@ sealed class DoneStep : StepPage
         var rdp = _state.Rdp is { Enabled: true } r2 ? r2 : null;
         if (rdp is not null)
         {
-            foreach (var m in rdp.Machines)
-            {
-                var url = rdp.UrlFor(m);
-                AddLink(_rdpLinks, $"{m.Name}（{m.Ip}）", url, url, Theme.Bold);
-            }
+            if (rdp.BrowserEnabled)
+                foreach (var m in rdp.Machines)
+                {
+                    var url = rdp.UrlFor(m);
+                    AddLink(_rdpLinks, $"{m.Name}（{m.Ip}）瀏覽器連線", url, url, Theme.Bold);
+                }
+            if (rdp.WarpEnabled)
+                _rdpLinks.Controls.Add(new Label
+                {
+                    Text = "WARP 使用者：按下方「複製連線資訊」傳給使用者，裡面的連線代碼貼到 CfTunnelTool 的使用者模式即可。",
+                    AutoSize = true,
+                    ForeColor = Theme.Text,
+                    Margin = new Padding(0, 4, 0, 6),
+                });
             if (rdp.MfaEnrollUrl is { } enroll)
                 AddLink(_rdpLinks, "註冊 2FA 裝置", enroll, enroll + "　（使用者第一次使用前先到這裡註冊）", Theme.Bold);
         }
@@ -121,20 +130,32 @@ sealed class DoneStep : StepPage
         var lines = new List<string> { "【遠端桌面連線方式】", "" };
         if (rdp.MfaEnrollUrl is { } enroll)
         {
-            lines.Add("1. 第一次使用：先開啟下面的網址，用你的 Email 收驗證碼登入，再依畫面註冊 2FA");
-            lines.Add($"   （建議用手機的 Google / Microsoft Authenticator 掃描 QR Code）");
-            lines.Add($"   {enroll}");
+            lines.Add("■ 第一次使用：先註冊 2FA");
+            lines.Add("  開啟下面的網址，用你的 Email 收驗證碼登入，再依畫面註冊 2FA");
+            lines.Add("  （建議用手機的 Google / Microsoft Authenticator 掃描 QR Code）");
+            lines.Add($"  {enroll}");
             lines.Add("");
-            lines.Add("2. 之後要連線時，開啟對應電腦的網址，依序輸入 Email 驗證碼、2FA 驗證碼、Windows 帳號密碼：");
         }
-        else
+
+        if (rdp.WarpEnabled)
         {
-            lines.Add("開啟對應電腦的網址，依序輸入 Email 驗證碼、2FA 驗證碼、Windows 帳號密碼：");
+            lines.Add("■ 方式一：WARP ＋ 遠端桌面連線（建議，最流暢）");
+            lines.Add("  1. 下載 CfTunnelTool（向管理者索取），在你的電腦執行，選「我要連到公司的電腦」");
+            lines.Add("  2. 貼上整段連線資訊（或下面的連線代碼），按「安裝並加入組織」");
+            lines.Add("  3. 依畫面用 Email 驗證碼登入 WARP，完成後桌面會出現遠端桌面捷徑");
+            lines.Add("  4. 點捷徑連線，輸入那台電腦的 Windows 帳號密碼；右下角跳出驗證通知時，點它完成 2FA");
+            lines.Add($"  連線代碼：{ClientConfig.FromRdp(rdp).ToCode()}");
+            lines.Add("");
         }
-        foreach (var m in rdp.Machines)
-            lines.Add($"   {m.Name}：{rdp.UrlFor(m)}");
-        lines.Add("");
-        lines.Add("建議使用 Chrome 或 Edge 瀏覽器。");
+
+        if (rdp.BrowserEnabled)
+        {
+            lines.Add(rdp.WarpEnabled ? "■ 方式二：瀏覽器（免安裝）" : "■ 用瀏覽器連線");
+            lines.Add("  開啟對應電腦的網址，依序輸入 Email 驗證碼、2FA 驗證碼、Windows 帳號密碼：");
+            foreach (var m in rdp.Machines)
+                lines.Add($"  {m.Name}：{rdp.UrlFor(m)}");
+            lines.Add("  建議使用 Chrome 或 Edge 瀏覽器。");
+        }
         return string.Join(Environment.NewLine, lines);
     }
 

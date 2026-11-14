@@ -52,9 +52,25 @@ static class Program
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
-        // 第一次使用：先跑設定精靈，完成後進入管理畫面
+        // 這台電腦是「使用者端」（之前選過「我要連到公司的電腦」）
+        if (config is null && AppStorage.LoadClient() is { } client)
+        {
+            Application.Run(new ClientForm(client));
+            return 0;
+        }
+
+        // 第一次使用：先選擇模式；管理者跑設定精靈，完成後進入管理畫面
         if (config is null)
         {
+            var chooser = new ModeChooserForm();
+            Application.Run(chooser);
+            if (chooser.Mode == AppMode.User)
+            {
+                Application.Run(new ClientForm(null));
+                return 0;
+            }
+            if (chooser.Mode != AppMode.Admin) return 0;
+
             var state = WizardState.From(null, AppStorage.LoadToken());
             Application.Run(new WizardForm(state));
             if (state.Result is null) return 0;

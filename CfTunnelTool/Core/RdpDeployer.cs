@@ -43,6 +43,9 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         current.AuthDomain ??= previous.AuthDomain;
         current.LauncherAppId ??= previous.LauncherAppId;
         current.LauncherPolicyId ??= previous.LauncherPolicyId;
+        current.WarpAppId ??= previous.WarpAppId;
+        current.WarpPolicyId ??= previous.WarpPolicyId;
+        current.WarpEnrollAppId ??= previous.WarpEnrollAppId;
         foreach (var m in current.Machines)
         {
             var old = previous.Machines.FirstOrDefault(p => p.Name.Equals(m.Name, StringComparison.OrdinalIgnoreCase));
@@ -109,10 +112,42 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             }
         }
 
-        // ---- 5. DNS ----
+        // ---- 5. App Launcher：使用者註冊 2FA 裝置（與註冊 WARP）的入口 ----
+        log.Step("設定 2FA 註冊入口（App Launcher）");
+        await WithPermission(PermApps, () => EnsureAppLauncherAsync(acc, rdp, config.TunnelName));
+
+        // ---- 6. 瀏覽器 RDP ----
+        var dnsOk = true;
+        if (rdp.BrowserEnabled)
+            dnsOk = await DeployBrowserAsync(config, zone, previous);
+        else
+            await RemoveBrowserAsync(rdp, zone);
+
+        // ---- 7. WARP ＋ 遠端桌面連線 ----
+        if (rdp.WarpEnabled)
+            await DeployWarpAsync(config, acc);
+        else
+            await RemoveWarpAsync(rdp, acc);
+
+        if (rdp.BrowserEnabled)
+            foreach (var m in rdp.Machines)
+                log.Info($"{m.Name}（瀏覽器）：{rdp.UrlFor(m)}");
+        if (rdp.MfaEnrollUrl is { } enroll)
+            log.Info($"使用者第一次登入前，先到這裡註冊 2FA 裝置：{enroll}");
+        if (rdp.WarpEnabled)
+            log.Info($"WARP 使用者：在自己的電腦執行 CfTunnelTool，選「我要連到公司的電腦」，貼上「複製連線資訊」裡的連線代碼。");
+
+        return dnsOk;
+    }
+
+    async Task<bool> DeployBrowserAsync(ToolConfig config, ZoneInfo zone, RdpConfig? previous)
+    {
+        var rdp = config.Rdp!;
+        var acc = zone.AccountId;
+
         log.Step("設定遠端桌面網址的 DNS");
         var dnsOk = await EnsureRdpDnsAsync(zone.ZoneId, rdp.Hostname);
-        if (previous is { Enabled: true } && previous.Hostname != rdp.Hostname)
+        if (previous is { Enabled: true, BrowserEnabled: true } && previous.Hostname != rdp.Hostname)
             await DeleteRdpDnsAsync(zone.ZoneId, previous.Hostname);
 
         // ---- 6. Access 政策（誰可以登入、2FA、剪貼簿與檔案傳輸） ----
@@ -156,17 +191,151 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             }
         });
         log.Ok("瀏覽器遠端桌面已設定");
-
-        // ---- 8. App Launcher：使用者註冊 2FA 裝置的入口 ----
-        log.Step("設定 2FA 註冊入口（App Launcher）");
-        await WithPermission(PermApps, () => EnsureAppLauncherAsync(acc, rdp, config.TunnelName));
-
-        foreach (var m in rdp.Machines)
-            log.Info($"{m.Name}：{rdp.UrlFor(m)}");
-        if (rdp.MfaEnrollUrl is { } enroll)
-            log.Info($"使用者第一次登入前，先到這裡註冊 2FA 裝置：{enroll}");
-
         return dnsOk;
+    }
+
+    /// <summary>取消勾選瀏覽器 RDP 時，刪除先前建立的應用程式、政策與 DNS。</summary>
+    async Task RemoveBrowserAsync(RdpConfig rdp, ZoneInfo zone)
+    {
+        var acc = zone.AccountId;
+        if (rdp.AppId is null && rdp.PolicyId is null) return;
+        log.Step("移除瀏覽器遠端桌面（已取消勾選）");
+        if (rdp.AppId is not null && await cf.DeleteAppAsync(acc, rdp.AppId)) log.Ok("已刪除瀏覽器遠端桌面應用程式");
+        if (rdp.PolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.PolicyId)) log.Ok("已刪除瀏覽器登入政策");
+        if (!string.IsNullOrEmpty(rdp.Hostname)) await DeleteRdpDnsAsync(zone.ZoneId, rdp.Hostname);
+        rdp.AppId = rdp.PolicyId = null;
+    }
+
+    // ================= WARP ＋ 遠端桌面連線 =================
+
+    async Task DeployWarpAsync(ToolConfig config, string acc)
+    {
+        var rdp = config.Rdp!;
+
+        log.Step("設定 WARP（讓使用者電腦能連到內網）");
+        await WithPermission(PermZeroTrust, () => cf.EnableGatewayProxyAsync(acc));
+        log.Ok("已開啟 Gateway 代理（TCP／UDP）");
+
+        // 誰可以把電腦註冊到組織：沿用 App Launcher 的政策（同一批 Email）
+        await WithPermission(PermApps, () => EnsureWarpEnrollAsync(acc, rdp));
+
+        // Split Tunnel：讓要連的電腦 IP 走 WARP
+        await WithPermission(PermZeroTrust, () => EnsureSplitTunnelAsync(acc, rdp));
+
+        // 連線前 2FA：私有網路應用程式
+        log.Step("設定 WARP 連線的登入政策與 2FA");
+        var policyName = $"CfTunnelTool WARP RDP - {config.TunnelName}";
+        var appName = $"遠端桌面 WARP - {config.TunnelName}";
+        await WithPermission(PermApps, async () =>
+        {
+            if (rdp.WarpPolicyId is not null && await cf.PolicyExistsAsync(acc, rdp.WarpPolicyId))
+                await cf.UpdateWarpPolicyAsync(acc, rdp.WarpPolicyId, policyName, rdp);
+            else
+                rdp.WarpPolicyId = await cf.CreateWarpPolicyAsync(acc, policyName, rdp);
+
+            if (rdp.WarpAppId is not null && await cf.AppExistsAsync(acc, rdp.WarpAppId))
+                await cf.UpdatePrivateRdpAppAsync(acc, rdp.WarpAppId, appName, rdp, rdp.WarpPolicyId);
+            else
+                rdp.WarpAppId = await cf.CreatePrivateRdpAppAsync(acc, appName, rdp, rdp.WarpPolicyId);
+        });
+        log.Ok("WARP 遠端桌面已設定：" + string.Join("、", rdp.Machines.Select(m => $"{m.Name} {m.Ip}:{m.Port}")));
+        log.Info($"WARP 組織名稱：{rdp.TeamName}");
+    }
+
+    async Task EnsureWarpEnrollAsync(string acc, RdpConfig rdp)
+    {
+        if (rdp.LauncherPolicyId is null)
+        {
+            log.Warn("沒有可用的註冊政策（App Launcher 不是本工具建立的），請到 Zero Trust → Team & Resources → Devices → " +
+                     "Device enrollment permissions 確認允許這些 Email 註冊：" + string.Join("、", rdp.AllowedEmails));
+            return;
+        }
+        if (rdp.WarpEnrollAppId is not null && await cf.AppExistsAsync(acc, rdp.WarpEnrollAppId))
+        {
+            await cf.UpdateWarpEnrollAppAsync(acc, rdp.WarpEnrollAppId, rdp.LauncherPolicyId);
+            log.Ok("WARP 註冊權限已更新");
+            return;
+        }
+        var existing = await cf.FindAppIdByTypeAsync(acc, "warp");
+        if (existing is null)
+        {
+            rdp.WarpEnrollAppId = await cf.CreateWarpEnrollAppAsync(acc, rdp.LauncherPolicyId);
+            log.Ok("已設定 WARP 註冊權限（允許的 Email 才能註冊）");
+            return;
+        }
+        log.Warn("這個帳號原本就有 WARP 裝置註冊設定（不是本工具建立的），沒有修改它。" +
+                 "請到 Zero Trust → Team & Resources → Devices → Device enrollment permissions 確認允許這些 Email：" +
+                 string.Join("、", rdp.AllowedEmails));
+    }
+
+    /// <summary>
+    /// 預設 WARP 設定檔的 Split Tunnel：
+    /// Exclude 模式（預設排除 192.168.0.0/16 等私有網段）→ 把包含電腦 IP 的項目拆開，只讓那些 /32 走 WARP；
+    /// Include 模式 → 直接加入 /32。
+    /// </summary>
+    async Task EnsureSplitTunnelAsync(string acc, RdpConfig rdp)
+    {
+        var (mode, entries) = await cf.GetSplitTunnelAsync(acc);
+        var hosts = rdp.Machines.Select(m => (m, cidr: Cidr.TryParse(m.Ip, out var c) ? c : default)).ToList();
+
+        if (mode == "include")
+        {
+            var changed = false;
+            foreach (var (m, cidr) in hosts)
+            {
+                if (entries.Any(e => e.Address is { } a && Cidr.TryParse(a, out var ec) && ec.Contains(cidr))) continue;
+                entries.Add(new SplitTunnelEntry(cidr.ToString(), null, $"CfTunnelTool RDP: {m.Name}"));
+                changed = true;
+            }
+            if (changed) await cf.PutSplitTunnelAsync(acc, "include", entries);
+            log.Ok($"Split Tunnel（Include 模式）已包含：{string.Join("、", hosts.Select(h => h.cidr.ToString()))}");
+            return;
+        }
+
+        var result = new List<SplitTunnelEntry>();
+        var split = new List<string>();
+        foreach (var e in entries)
+        {
+            if (e.Address is null || !Cidr.TryParse(e.Address, out var ec))
+            {
+                result.Add(e);
+                continue;
+            }
+            var pieces = new List<Cidr> { ec };
+            foreach (var (_, cidr) in hosts)
+                pieces = pieces.SelectMany(p => p.Contains(cidr) ? p.Subtract(cidr) : [p]).ToList();
+            if (pieces.Count == 1 && pieces[0] == ec)
+            {
+                result.Add(e);
+                continue;
+            }
+            split.Add(e.Address);
+            var desc = string.IsNullOrEmpty(e.Description) ? "" : e.Description + " ";
+            result.AddRange(pieces.Select(p => new SplitTunnelEntry(p.ToString(), null, desc + "(CfTunnelTool split)")));
+        }
+
+        if (split.Count > 0)
+        {
+            await cf.PutSplitTunnelAsync(acc, "exclude", result);
+            log.Ok($"Split Tunnel：已讓 {string.Join("、", hosts.Select(h => h.cidr.ToString()))} 走 WARP" +
+                   $"（拆開原本排除的 {string.Join("、", split)}）");
+        }
+        else
+        {
+            log.Ok("Split Tunnel：電腦 IP 已經會走 WARP，不需變更");
+        }
+    }
+
+    /// <summary>取消勾選 WARP 時，刪除本工具建立的 WARP 應用程式與政策（Split Tunnel 不還原，對其他使用者無影響）。</summary>
+    async Task RemoveWarpAsync(RdpConfig rdp, string acc)
+    {
+        if (rdp.WarpAppId is null && rdp.WarpPolicyId is null && rdp.WarpEnrollAppId is null) return;
+        log.Step("移除 WARP 遠端桌面設定");
+        if (rdp.WarpAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpAppId)) log.Ok("已刪除 WARP 遠端桌面應用程式");
+        if (rdp.WarpPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.WarpPolicyId)) log.Ok("已刪除 WARP 登入政策");
+        if (rdp.WarpEnrollAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpEnrollAppId)) log.Ok("已刪除 WARP 註冊權限");
+        rdp.WarpAppId = rdp.WarpPolicyId = rdp.WarpEnrollAppId = null;
+        log.Info("Split Tunnel 中讓電腦 IP 走 WARP 的設定保留不動（不影響其他使用者）。");
     }
 
     /// <summary>
@@ -337,7 +506,9 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     public async Task RemoveAsync(RdpConfig rdp, ZoneInfo zone)
     {
         var acc = zone.AccountId;
-        log.Step("移除瀏覽器遠端桌面設定");
+        // WARP 的註冊權限應用程式沿用 App Launcher 政策，要先刪
+        await RemoveWarpAsync(rdp, acc);
+        log.Step("移除遠端桌面設定");
         if (rdp.AppId is not null && await cf.DeleteAppAsync(acc, rdp.AppId))
             log.Ok("已刪除遠端桌面應用程式");
         if (rdp.PolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.PolicyId))
@@ -358,7 +529,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
     public async Task<RdpOnlineStatus> GetStatusAsync(RdpConfig rdp, string accountId)
     {
-        var appOk = rdp.AppId is not null && await cf.AppExistsAsync(accountId, rdp.AppId);
+        var appOk = (!rdp.BrowserEnabled || (rdp.AppId is not null && await cf.AppExistsAsync(accountId, rdp.AppId))) &&
+                    (!rdp.WarpEnabled || (rdp.WarpAppId is not null && await cf.AppExistsAsync(accountId, rdp.WarpAppId)));
         var routes = new List<RdpMachineStatus>();
         foreach (var m in rdp.Machines)
         {

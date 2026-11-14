@@ -60,9 +60,23 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 有完整步驟和第一
 
 ![管理畫面](docs/screenshots/6-dashboard.png)
 
-## 遠端桌面（瀏覽器 RDP ＋ 2FA）
+## 遠端桌面（RDP ＋ 2FA）
 
-使用者開啟連線網址後，依序通過 **Email 驗證碼 → 2FA → Windows 帳號密碼**，就能在瀏覽器裡使用遠端桌面，不需要安裝任何軟體。
+兩種連線方式可以各自開啟，共用同一份電腦清單與允許登入的 Email。不論哪一種，都要依序通過 **Email 驗證碼 → 2FA → Windows 帳號密碼**。
+
+| | WARP ＋ 遠端桌面連線（建議） | 瀏覽器 |
+|---|---|---|
+| 使用者端 | 安裝 Cloudflare WARP（CfTunnelTool 使用者模式自動安裝） | 只要瀏覽器 |
+| 流暢度 | 原生 mstsc，支援 UDP／H.264，接近內網 | 較慢 |
+| 功能 | 聲音、多螢幕、印表機、剪貼簿圖片 | 文字剪貼簿（500 KB）、檔案傳輸（Beta） |
+| 適合 | 內部員工、常態使用 | 外部人員、偶爾使用 |
+
+**WARP 使用者端（使用者模式）：** 在自己的電腦執行 CfTunnelTool，選「我要連到公司的電腦」，貼上管理者「複製連線資訊」裡的連線代碼（`CFT1:` 開頭，只含組織名稱與內網 IP，不含密碼）。程式會從 Cloudflare 官方網站下載安裝 WARP、設定組織，並在桌面建立遠端桌面捷徑。
+
+**WARP 模式在 Cloudflare 上自動完成：** 開啟 Gateway TCP／UDP 代理；裝置註冊權限（只有允許的 Email）；Split Tunnel 讓被開放的電腦 `/32` 走 WARP（從預設排除的私有網段中拆出）；私有網路應用程式要求連線前通過 2FA。這些會套用到帳號的預設 WARP 設定，但只影響被開放的 IP。
+
+![模式選擇](docs/screenshots/7-mode.png)
+![使用者模式](docs/screenshots/8-client.png)
 
 **管理者需要準備：**
 
@@ -85,7 +99,7 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 有完整步驟和第一
 
 **遠端登入密碼：** Windows 不允許空白密碼的帳號遠端登入。精靈的「這台電腦的遠端登入密碼」可以幫本機帳號設定密碼、加入 Remote Desktop Users 群組，並**保留開機自動登入**。自動登入的密碼存在 Windows 的 LSA 機密，做法和微軟 Sysinternals Autologon 相同，不會以明文寫進登錄檔。遠端登入時帳號輸入 `電腦名稱\帳號`。Microsoft 帳號、網域帳號的密碼無法在這裡修改。
 
-**限制：** 剪貼簿單次 500 KB、不能複製圖片、沒有聲音、檔案傳輸為 Cloudflare 的 Beta 功能。需要聲音或多螢幕時，請改用 Cloudflare WARP ＋ Windows 遠端桌面連線。
+**瀏覽器方式的限制：** 剪貼簿單次 500 KB、不能複製圖片、沒有聲音、畫面較慢、檔案傳輸為 Cloudflare 的 Beta 功能。需要流暢畫面、聲音或多螢幕時，請使用 WARP ＋ 遠端桌面連線。
 
 ## 安全設計
 

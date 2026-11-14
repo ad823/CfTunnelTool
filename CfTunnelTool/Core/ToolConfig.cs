@@ -94,6 +94,7 @@ sealed partial class ToolConfig
         if (RdpEnabled)
         {
             Rdp!.Validate(Domain);
+            if (!Rdp.BrowserEnabled) return; // 只用 WARP 時不需要瀏覽器網址
             if (!HostnamePattern().IsMatch(Rdp.Hostname))
                 throw new InvalidOperationException($"遠端桌面網址 {Rdp.Hostname} 格式不正確，子網域只能使用英文、數字和 -。");
             if (seen.Contains(Rdp.Hostname))

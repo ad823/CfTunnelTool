@@ -10,6 +10,7 @@ sealed partial class RdpStep : StepPage
 
     readonly WizardState _state;
     readonly CheckBox _enable;
+    readonly CheckBox _modeBrowser, _modeWarp;
     readonly List<Control> _settings = [];
     readonly TextBox _sub;
     readonly Label _domainSuffix;
@@ -38,12 +39,12 @@ sealed partial class RdpStep : StepPage
     {
         _state = state;
 
-        AddText("讓使用者用瀏覽器就能連到這台電腦或區網內其他電腦的遠端桌面。登入時要先通過 Email 驗證碼和 2FA，" +
+        AddText("讓使用者從外面連到這台電腦或區網內其他電腦的遠端桌面。連線前要先通過 Email 驗證碼和 2FA，" +
                 "再輸入 Windows 帳號密碼。不需要的話，不勾選直接按「下一步」即可。");
 
         _enable = new CheckBox
         {
-            Text = "啟用瀏覽器遠端桌面（RDP）＋ 2FA",
+            Text = "啟用遠端桌面（RDP）＋ 2FA",
             AutoSize = true,
             Font = Theme.Sub,
             Margin = new Padding(0, 4, 0, 8),
@@ -51,8 +52,15 @@ sealed partial class RdpStep : StepPage
         _enable.CheckedChanged += (_, _) => UpdateEnabled();
         Add(_enable, stretch: false);
 
+        // ---- 連線方式 ----
+        S(AddText("連線方式（可以兩種都開）：", Theme.Bold, top: 4, bottom: 2));
+        _modeWarp = Check("WARP ＋ 遠端桌面連線（最流暢；使用者需安裝 WARP，程式可自動安裝）", false);
+        _modeBrowser = Check("瀏覽器（免安裝，但畫面較慢；適合偶爾使用或外部人員）", true);
+        S(Add(_modeWarp, stretch: false));
+        S(Add(_modeBrowser, stretch: false));
+
         // ---- 網址 ----
-        S(AddText("遠端桌面網址：", Theme.Bold, top: 6, bottom: 2));
+        S(AddText("瀏覽器連線網址（只有瀏覽器方式會用到）：", Theme.Bold, top: 10, bottom: 2));
         _sub = new TextBox { Width = 160, Margin = new Padding(0, 4, 4, 0) };
         _domainSuffix = InlineLabel("");
         _domainSuffix.ForeColor = Theme.Muted;
@@ -133,11 +141,15 @@ sealed partial class RdpStep : StepPage
         _accountHint = S(AddText("讀取帳號中…", Theme.Small, Theme.Muted, top: 2, bottom: 4));
 
         AddHelpBox("使用者怎麼連線？",
-            "1.  開啟管理者提供的網址（每台電腦一個連結，完成頁和管理畫面都會列出）\n" +
-            "2.  輸入自己的 Email，收信取得驗證碼並輸入\n" +
-            "3.  第一次登入時依畫面註冊 2FA（例如用 Authenticator App 掃描 QR Code），之後每次輸入 App 上的 6 位數驗證碼\n" +
-            "4.  在瀏覽器裡輸入那台電腦的 Windows 帳號密碼，就會看到遠端桌面\n\n" +
-            "限制：剪貼簿單次上限 500 KB、不能複製圖片、沒有聲音、檔案傳輸為 Beta 功能。需要聲音或多螢幕時，請改用 WARP ＋ 遠端桌面連線。");
+            "【WARP ＋ 遠端桌面連線】\n" +
+            "1.  部署完成後按「複製連線資訊」傳給使用者（裡面有連線代碼，不含任何密碼）\n" +
+            "2.  使用者在自己的電腦執行 CfTunnelTool，選「我要連到公司的電腦」，貼上連線代碼\n" +
+            "3.  程式自動安裝 WARP，使用者用 Email 驗證碼登入並註冊 2FA，桌面會出現遠端桌面捷徑\n" +
+            "4.  點捷徑連線；第一次或驗證過期時，右下角會跳出通知要求通過 2FA\n\n" +
+            "【瀏覽器】\n" +
+            "1.  開啟管理者提供的網址，輸入 Email 驗證碼，第一次登入時註冊 2FA\n" +
+            "2.  在瀏覽器裡輸入那台電腦的 Windows 帳號密碼\n" +
+            "限制：剪貼簿單次上限 500 KB、不能複製圖片、沒有聲音、畫面較慢。");
 
         AddHelpBox("資安提醒",
             "•  這台電腦是中繼站：部署時建議不要勾選「記住 Token」，避免電腦被入侵時連帶影響你的 Cloudflare 網域\n" +
@@ -363,6 +375,8 @@ sealed partial class RdpStep : StepPage
             _enable.Checked = rdp?.Enabled ?? false;
             if (rdp is not null)
             {
+                _modeBrowser.Checked = rdp.BrowserEnabled;
+                _modeWarp.Checked = rdp.WarpEnabled;
                 _sub.Text = rdp.Hostname == _state.Domain ? "" :
                     rdp.Hostname.EndsWith("." + _state.Domain) ? rdp.Hostname[..^(_state.Domain.Length + 1)] : "rdp";
                 foreach (var m in rdp.Machines) AddMachineRow(m.Name, m.Ip, m.Port);
@@ -495,6 +509,8 @@ sealed partial class RdpStep : StepPage
         var rdp = new RdpConfig
         {
             Enabled = _enable.Checked,
+            BrowserEnabled = _modeBrowser.Checked,
+            WarpEnabled = _modeWarp.Checked,
             Hostname = sub is "" or "@" ? _state.Domain : $"{sub}.{_state.Domain}",
             Machines = ReadMachines(),
             AllowedEmails = _emails.Lines.Select(l => l.Trim()).Where(l => l.Length > 0).ToList(),
