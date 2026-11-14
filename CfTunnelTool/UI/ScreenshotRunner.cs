@@ -88,7 +88,13 @@ static class ScreenshotRunner
         Capture(chooser, Path.Combine(dir, "mode-chooser.png"));
         chooser.Close();
 
-        var client = new ClientForm(ClientConfig.FromRdp(DemoRdp()), demo: true)
+        var demoClient = ClientConfig.FromRdp(DemoRdp());
+        demoClient.Team = "yourteam";
+        demoClient.LastVerifiedAt = DateTime.Now.AddHours(-2);
+        demoClient.Machines[0].UserName = @"OFFICE-PC\alice";
+        demoClient.Machines[0].LastConnectedAt = DateTime.Now.AddHours(-2);
+        demoClient.Machines.Add(new ClientMachine { Name = "meeting-room", Ip = "192.168.10.45", Port = 3389 });
+        var client = new ClientForm(demoClient, demo: true)
         {
             StartPosition = FormStartPosition.Manual,
             Location = new Point(30, 30),
@@ -98,6 +104,12 @@ static class ScreenshotRunner
         Pump(1500);
         Capture(client, Path.Combine(dir, "client.png"));
         client.Close();
+
+        var edit = new MachineEditForm(demoClient.Machines[0]) { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
+        edit.Show();
+        Pump(500);
+        Capture(edit, Path.Combine(dir, "machine-edit.png"));
+        edit.Close();
     }
 
     static RdpConfig DemoRdp() => new()

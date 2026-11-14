@@ -117,6 +117,82 @@ static class WarpClient
         if (IsInstalled) Cloudflared.Run(CliPath, "--accept-tos", "connect");
     }
 
+    /// <summary>中斷 WARP（之後一般上網不經過公司）。</summary>
+    public static void Disconnect()
+    {
+        if (IsInstalled) Cloudflared.Run(CliPath, "--accept-tos", "disconnect");
+    }
+
+    /// <summary>登出組織：刪除這台電腦在組織的註冊，並移除組織設定檔。</summary>
+    public static void LeaveOrganization(ILog log)
+    {
+        if (IsInstalled)
+        {
+            Cloudflared.Run(CliPath, "--accept-tos", "disconnect");
+            var r = Cloudflared.Run(CliPath, "--accept-tos", "registration", "delete");
+            if (r.ExitCode == 0) log.Ok("已登出 WARP 組織");
+            else log.Warn("登出 WARP 組織時回報：" + r.Output.Trim());
+        }
+        if (File.Exists(MdmPath))
+        {
+            File.Delete(MdmPath);
+            log.Ok("已移除 WARP 組織設定檔");
+        }
+    }
+
+    /// <summary>找出 WARP 的解除安裝指令（MsiExec /X{GUID}）。</summary>
+    static string? FindUninstallProductCode()
+    {
+        foreach (var root in new[] { @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                                     @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" })
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(root);
+            if (key is null) continue;
+            foreach (var name in key.GetSubKeyNames())
+            {
+                using var sub = key.OpenSubKey(name);
+                var display = sub?.GetValue("DisplayName") as string ?? "";
+                if ((display.Contains("Cloudflare WARP", StringComparison.OrdinalIgnoreCase) ||
+                     display.Contains("Cloudflare One", StringComparison.OrdinalIgnoreCase)) &&
+                    name.StartsWith('{') && name.EndsWith('}'))
+                    return name;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>解除安裝 WARP（會阻塞，請在背景執行緒呼叫）。</summary>
+    public static void Uninstall(ILog log)
+    {
+        var code = FindUninstallProductCode();
+        if (code is null)
+        {
+            log.Warn("找不到 WARP 的安裝資訊，請到「設定 → 應用程式」手動解除安裝。");
+            return;
+        }
+        var r = Cloudflared.Run("msiexec.exe", "/x", code, "/qn", "/norestart");
+        if (r.ExitCode is 0 or 3010) log.Ok("WARP 已解除安裝" + (r.ExitCode == 3010 ? "（建議重新開機）" : ""));
+        else log.Warn($"WARP 解除安裝失敗（msiexec 錯誤碼 {r.ExitCode}），請到「設定 → 應用程式」手動解除安裝。");
+    }
+
+    /// <summary>
+    /// 引導重新驗證 2FA：開啟 WARP 視窗（個人資料 → 帳戶資訊 → 重新驗證），
+    /// 並開啟官方的 refresh-identity 網址重新登入組織。
+    /// </summary>
+    public static void OpenReauthenticate(string team)
+    {
+        OpenGui();
+        if (!string.IsNullOrEmpty(team))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo($"https://{team}.cloudflareaccess.com/cdn-cgi/access/refresh-identity")
+                    { UseShellExecute = true });
+            }
+            catch (System.ComponentModel.Win32Exception) { }
+        }
+    }
+
     /// <summary>開啟 WARP 視窗（第一次會引導使用者登入組織）。</summary>
     public static void OpenGui()
     {
@@ -127,18 +203,31 @@ static class WarpClient
     // ---------- 遠端桌面捷徑 ----------
 
     /// <summary>.rdp 檔內容：詢問帳密、自動偵測頻寬（可用 UDP 與 H.264），並開啟剪貼簿。</summary>
-    public static string RdpFileContent(ClientMachine m) => string.Join("\r\n",
-        $"full address:s:{m.Ip}:{m.Port}",
-        "prompt for credentials:i:1",
-        "administrative session:i:0",
-        "screen mode id:i:2",
-        "use multimon:i:0",
-        "networkautodetect:i:1",
-        "bandwidthautodetect:i:1",
-        "connection type:i:7",
-        "redirectclipboard:i:1",
-        "authentication level:i:2",
-        "") ;
+    public static string RdpFileContent(ClientMachine m)
+    {
+        var lines = new List<string>
+        {
+            $"full address:s:{m.Ip}:{m.Port}",
+            "prompt for credentials:i:1",
+            "administrative session:i:0",
+            "screen mode id:i:2",
+            "use multimon:i:0",
+            "networkautodetect:i:1",
+            "bandwidthautodetect:i:1",
+            "connection type:i:7",
+            "redirectclipboard:i:1",
+            "authentication level:i:2",
+        };
+        if (!string.IsNullOrWhiteSpace(m.UserName)) lines.Add($"username:s:{m.UserName.Trim()}");
+        lines.Add("");
+        return string.Join("\r\n", lines);
+    }
+
+    public static void DeleteRdpShortcut(ClientMachine m)
+    {
+        var path = RdpFilePath(m);
+        if (File.Exists(path)) File.Delete(path);
+    }
 
     static string DesktopDir => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
 
@@ -160,8 +249,9 @@ static class WarpClient
 
     public static void OpenRdp(ClientMachine m)
     {
+        // 每次都重寫，讓修改過的帳號或連接埠立即生效
         var path = RdpFilePath(m);
-        if (!File.Exists(path)) File.WriteAllText(path, RdpFileContent(m), new UTF8Encoding(false));
+        File.WriteAllText(path, RdpFileContent(m), new UTF8Encoding(false));
         Process.Start(new ProcessStartInfo("mstsc.exe", $"\"{path}\"") { UseShellExecute = true });
     }
 }

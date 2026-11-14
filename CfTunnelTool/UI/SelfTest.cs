@@ -149,7 +149,50 @@ static class SelfTest
                                        && parsed.Machines[1].Ip == "192.168.1.11" && parsed.Machines[1].Port == 3390, code);
         Check("連線代碼：無效代碼回傳 null", ClientConfig.TryParse("CFT1:not-base64!!") is null && ClientConfig.TryParse("hello") is null);
 
+        // ---- 連線代碼 v1.4：2FA 間隔、舊代碼相容、合併 ----
+        var parsedS = ClientConfig.TryParse(code);
+        Check("連線代碼：含 2FA 驗證間隔", parsedS?.MfaSessionDuration == "8h");
+        var oldCode = "CFT1:" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"t\":\"myteam\",\"m\":[[\"pc1\",\"192.168.1.10\",\"3389\"]]}"));
+        var oldParsed = ClientConfig.TryParse(oldCode);
+        Check("連線代碼：舊版（沒有 s）仍可解析", oldParsed is not null && oldParsed.MfaSessionDuration is null && oldParsed.Machines.Count == 1);
+
+        var mine = ClientConfig.TryParse(code)!;
+        mine.Machines[0].UserName = @"PC1\me";
+        mine.Machines[0].LastConnectedAt = new DateTime(2026, 1, 1);
+        var incomingCfg = new ClientConfig
+        {
+            Team = "MyTeam",
+            MfaSessionDuration = "1h",
+            Machines =
+            [
+                new ClientMachine { Name = "pc1-renamed", Ip = "192.168.1.10", Port = 3389 },
+                new ClientMachine { Name = "pc3", Ip = "192.168.1.30", Port = 3389 },
+            ],
+        };
+        var merged = mine.Merge(incomingCfg, out var addedN, out var updatedN);
+        Check("合併：同組織（不分大小寫）新增 1、更新 1", merged && addedN == 1 && updatedN == 1, $"added={addedN} updated={updatedN}");
+        Check("合併：保留使用者自訂帳號與時間", mine.Machines[0].Name == "pc1-renamed" && mine.Machines[0].UserName == @"PC1\me"
+                                         && mine.Machines[0].LastConnectedAt == new DateTime(2026, 1, 1));
+        Check("合併：更新 2FA 間隔", mine.MfaSessionDuration == "1h");
+        Check("合併：不同組織回傳 false 且不修改", !mine.Merge(new ClientConfig { Team = "other", Machines = [new ClientMachine { Ip = "1.2.3.4" }] }, out _, out _)
+                                          && mine.Machines.Count == 3);
+
+        // ---- 2FA 狀態估算 ----
+        var now = new DateTime(2026, 11, 14, 12, 0, 0);
+        Check("2FA：0m 為每次都要驗證", TwoFactorStatus.Compute("0m", now.AddHours(-1), now).State == TwoFactorState.EveryTime);
+        var valid = TwoFactorStatus.Compute("8h", now.AddHours(-2), now);
+        Check("2FA：8 小時內有效並算出到期時間", valid.State == TwoFactorState.Valid && valid.ExpiresAt == now.AddHours(6), valid.Describe(now));
+        Check("2FA：超過間隔為已過期", TwoFactorStatus.Compute("1h", now.AddHours(-2), now).State == TwoFactorState.Expired);
+        Check("2FA：沒有記錄時為未知", TwoFactorStatus.Compute("8h", null, now).State == TwoFactorState.Unknown);
+        Check("2FA：舊代碼沒有間隔時顯示依管理者設定", TwoFactorStatus.Compute(null, now, now).IntervalText == "依管理者設定");
+        Check("2FA：間隔文字", TwoFactorStatus.Compute("24h", now, now).IntervalText == "每 24 小時驗證一次"
+                            && TwoFactorStatus.Compute("30m", now, now).IntervalText == "每 30 分鐘驗證一次");
+
         // ---- .rdp 檔 ----
+        Check(".rdp：有預設帳號時寫入 username",
+            WarpClient.RdpFileContent(new ClientMachine { Ip = "1.2.3.4", UserName = @"PC\u" }).Contains(@"username:s:PC\u"));
+        Check(".rdp：沒有預設帳號時不寫 username",
+            !WarpClient.RdpFileContent(new ClientMachine { Ip = "1.2.3.4" }).Contains("username:s:"));
         var rdpFile = WarpClient.RdpFileContent(new ClientMachine { Name = "pc", Ip = "192.168.1.10", Port = 3389 });
         Check(".rdp：位址與詢問帳密", rdpFile.Contains("full address:s:192.168.1.10:3389") && rdpFile.Contains("prompt for credentials:i:1"));
 
