@@ -369,6 +369,53 @@ sealed partial class CloudflareClient
     public async Task UpdatePrivateRdpAppAsync(string accountId, string appId, string name, RdpConfig rdp, string policyId)
         => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", PrivateRdpAppBody(name, rdp, policyId));
 
+    // ---------- Gateway 網路規則：被開放的電腦只開放遠端桌面連接埠 ----------
+
+    /// <summary>
+    /// 封鎖條件：連到被開放電腦的 IP、但不是它的遠端桌面連接埠。同一個 port 的電腦放在同一組。
+    /// 使用獨立虛擬網路時限定在該虛擬網路，不影響其他地點 IP 相同的電腦。
+    /// 例如 <c>(net.dst.ip in {192.168.1.10/32 192.168.1.11/32} and not(net.dst.port in {3389}))</c>
+    /// </summary>
+    internal static string GatewayBlockTraffic(RdpConfig rdp)
+    {
+        var groups = rdp.Machines
+            .GroupBy(m => m.Port)
+            .OrderBy(g => g.Key)
+            .Select(g => $"(net.dst.ip in {{{string.Join(' ', g.Select(m => $"{m.Ip}/32"))}}} and not(net.dst.port in {{{g.Key}}}))")
+            .ToList();
+        var hosts = string.Join(" or ", groups);
+        return rdp.UseOwnVnet && !string.IsNullOrEmpty(rdp.VnetId)
+            ? $"net.vnet_id == \"{rdp.VnetId}\" and ({hosts})"
+            : hosts;
+    }
+
+    internal static object GatewayRuleBody(string name, RdpConfig rdp) => new
+    {
+        name,
+        description = "CfTunnelTool：被開放的電腦透過 WARP 只能連遠端桌面連接埠，其他連接埠一律封鎖",
+        action = "block",
+        enabled = true,
+        filters = new[] { "l4" },
+        traffic = GatewayBlockTraffic(rdp),
+        identity = "",
+        device_posture = "",
+    };
+
+    public async Task<string> CreateGatewayRuleAsync(string accountId, string name, RdpConfig rdp)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/gateway/rules", GatewayRuleBody(name, rdp)))!["id"]!.GetValue<string>();
+
+    public async Task UpdateGatewayRuleAsync(string accountId, string ruleId, string name, RdpConfig rdp)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/gateway/rules/{ruleId}", GatewayRuleBody(name, rdp));
+
+    public async Task<bool> GatewayRuleExistsAsync(string accountId, string ruleId)
+    {
+        try { await SendAsync(HttpMethod.Get, $"accounts/{accountId}/gateway/rules/{ruleId}"); return true; }
+        catch (CloudflareApiException ex) when (ex.IsNotFound) { return false; }
+    }
+
+    public Task<bool> DeleteGatewayRuleAsync(string accountId, string ruleId)
+        => TryDeleteAsync($"accounts/{accountId}/gateway/rules/{ruleId}");
+
     // ---------- 共用應用程式的政策（多地點） ----------
 
     /// <summary>應用程式目前套用的政策 ID（依優先順序）。</summary>

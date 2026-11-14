@@ -49,6 +49,7 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         current.LauncherPolicyId ??= previous.LauncherPolicyId;
         current.WarpAppId ??= previous.WarpAppId;
         current.WarpPolicyId ??= previous.WarpPolicyId;
+        current.GatewayRuleId ??= previous.GatewayRuleId;
         if (current.WarpEnrollAppId is null)
         {
             current.WarpEnrollAppId = previous.WarpEnrollAppId;
@@ -263,8 +264,37 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             else
                 rdp.WarpAppId = await cf.CreatePrivateRdpAppAsync(acc, appName, rdp, warpPolicyId);
         });
+
+        // 只開放遠端桌面連接埠：其他連接埠由 Gateway 封鎖（預設是允許）
+        await WithPermission(PermZeroTrust, () => EnsureGatewayRuleAsync(acc, rdp, config.TunnelName));
+
         log.Ok("WARP 遠端桌面已設定：" + string.Join("、", rdp.Machines.Select(m => $"{m.Name} {m.Ip}:{m.Port}")));
         log.Info($"WARP 組織名稱：{rdp.TeamName}");
+    }
+
+    /// <summary>
+    /// Gateway 網路規則：被開放的電腦透過 WARP 只能連遠端桌面連接埠。
+    /// 每次部署都依目前的電腦清單更新；Cloudflare 不接受時提醒，不中斷部署。
+    /// </summary>
+    async Task EnsureGatewayRuleAsync(string acc, RdpConfig rdp, string tunnelName)
+    {
+        var name = $"CfTunnelTool 只開放遠端桌面 - {tunnelName}";
+        try
+        {
+            if (rdp.GatewayRuleId is not null && await cf.GatewayRuleExistsAsync(acc, rdp.GatewayRuleId))
+                await cf.UpdateGatewayRuleAsync(acc, rdp.GatewayRuleId, name, rdp);
+            else
+                rdp.GatewayRuleId = await cf.CreateGatewayRuleAsync(acc, name, rdp);
+            log.Ok("Gateway 規則：被開放的電腦只開放遠端桌面連接埠（" +
+                   string.Join("、", rdp.Machines.Select(m => $"{m.Ip}:{m.Port}")) + "），其他連接埠封鎖");
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            log.Warn("無法建立 Gateway 規則，被開放的電腦上其他連接埠仍可透過 WARP 連線。" +
+                     "可以到 Zero Trust → Traffic policies → Firewall policies → Network 手動新增封鎖規則：" +
+                     CloudflareClient.GatewayBlockTraffic(rdp));
+            log.Info(ex.Message);
+        }
     }
 
     /// <summary>
@@ -419,8 +449,10 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     /// <summary>取消勾選 WARP 時，刪除本工具建立的 WARP 應用程式與政策（Split Tunnel 不還原，對其他使用者無影響）。</summary>
     async Task RemoveWarpAsync(RdpConfig rdp, string acc)
     {
-        if (rdp.WarpAppId is null && rdp.WarpPolicyId is null && rdp.WarpEnrollAppId is null) return;
+        if (rdp.WarpAppId is null && rdp.WarpPolicyId is null && rdp.WarpEnrollAppId is null && rdp.GatewayRuleId is null) return;
         log.Step("移除 WARP 遠端桌面設定");
+        if (rdp.GatewayRuleId is not null && await cf.DeleteGatewayRuleAsync(acc, rdp.GatewayRuleId)) log.Ok("已刪除 Gateway 規則（只開放遠端桌面連接埠）");
+        rdp.GatewayRuleId = null;
         if (rdp.WarpAppId is not null && await cf.DeleteAppAsync(acc, rdp.WarpAppId)) log.Ok("已刪除 WARP 遠端桌面應用程式");
         // 註冊權限使用 WARP 政策（舊版是 App Launcher 政策），先從註冊權限移除，政策才刪得掉
         if (rdp.WarpEnrollAppId is not null)

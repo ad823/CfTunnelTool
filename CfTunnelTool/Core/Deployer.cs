@@ -20,6 +20,7 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
         rdp.AppId is not null || rdp.PolicyId is not null ||
         rdp.LauncherAppId is not null || rdp.LauncherPolicyId is not null ||
         rdp.WarpAppId is not null || rdp.WarpPolicyId is not null || rdp.WarpEnrollAppId is not null ||
+        rdp.GatewayRuleId is not null ||
         (rdp.UseOwnVnet && rdp.VnetOwned && rdp.VnetId is not null) ||
         rdp.Machines.Any(m => m.TargetId is not null || m.RouteId is not null);
 
@@ -108,7 +109,7 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
             if (config.Rdp is { } r)
             {
                 r.AppId = r.PolicyId = r.LauncherAppId = r.LauncherPolicyId = null;
-                r.WarpAppId = r.WarpPolicyId = r.WarpEnrollAppId = null;
+                r.WarpAppId = r.WarpPolicyId = r.WarpEnrollAppId = r.GatewayRuleId = null;
                 foreach (var m in r.Machines) m.TargetId = m.RouteId = null;
             }
         }

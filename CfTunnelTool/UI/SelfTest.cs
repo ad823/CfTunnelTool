@@ -380,6 +380,27 @@ static class SelfTest
             !CloudflareClient.PolicyRequiresMfa(System.Text.Json.Nodes.JsonNode.Parse(
                 "{\"mfa_config\":{\"mfa_disabled\":false,\"allowed_authenticators\":[]}}")));
 
+        // ---- v1.7.3：Gateway 規則只開放遠端桌面連接埠 ----
+        var gwSrc = Good(); // pc1 192.168.1.10:3389、pc2 192.168.1.11:3390
+        gwSrc.Machines.Add(new RdpMachine { Name = "pc3", Ip = "192.168.1.12" });
+        var gwTraffic = CloudflareClient.GatewayBlockTraffic(gwSrc);
+        sb.AppendLine("INFO  GatewayBlockTraffic = " + gwTraffic);
+        Check("Gateway：依連接埠分組、封鎖其他連接埠",
+            gwTraffic == "(net.dst.ip in {192.168.1.10/32 192.168.1.12/32} and not(net.dst.port in {3389}))" +
+                         " or (net.dst.ip in {192.168.1.11/32} and not(net.dst.port in {3390}))", gwTraffic);
+        Check("Gateway：預設虛擬網路不加 vnet 條件", !gwTraffic.Contains("net.vnet_id"));
+        gwSrc.UseOwnVnet = true;
+        gwSrc.VnetId = "v-1";
+        var gwVnet = CloudflareClient.GatewayBlockTraffic(gwSrc);
+        Check("Gateway：獨立虛擬網路限定在該虛擬網路",
+            gwVnet.StartsWith("net.vnet_id == \"v-1\" and ((net.dst.ip in {") && gwVnet.EndsWith("))"), gwVnet);
+        var gwJson = JsonSerializer.Serialize(CloudflareClient.GatewayRuleBody("g", gwSrc));
+        sb.AppendLine("INFO  GatewayRuleBody = " + gwJson);
+        Check("Gateway：block、l4、啟用", gwJson.Contains("\"action\":\"block\"") && gwJson.Contains("\"enabled\":true") &&
+                                          gwJson.Contains("\"filters\":[\"l4\"]"), gwJson);
+        Check("Gateway：舊設定檔的 Gateway 規則 ID 會帶入",
+            new Func<bool>(() => { var cur = Good(); RdpDeployer.CarryOverIds(cur, new RdpConfig { GatewayRuleId = "gw" }); return cur.GatewayRuleId == "gw"; })());
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {
