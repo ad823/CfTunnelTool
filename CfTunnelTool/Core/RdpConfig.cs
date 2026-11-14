@@ -51,9 +51,31 @@ sealed partial class RdpConfig
     /// <summary>地點代號：使用獨立虛擬網路時加在遠端桌面目標名稱前面，避免和其他地點的同名電腦衝突。</summary>
     public string? SiteName { get; set; }
 
-    /// <summary>Cloudflare 基礎架構目標的名稱。預設虛擬網路沿用電腦名稱（與舊版相容）。</summary>
+    /// <summary>
+    /// Cloudflare 基礎架構目標的名稱，必須符合主機名稱規則（RFC 1123：英文、數字、-、.）。
+    /// 預設虛擬網路沿用電腦名稱（與舊版相容）；獨立虛擬網路時加上地點代號。
+    /// </summary>
     public string TargetName(RdpMachine m) =>
-        UseOwnVnet && !string.IsNullOrEmpty(SiteName) ? $"{SiteName}-{m.Name}" : m.Name;
+        ToHostName(UseOwnVnet && !string.IsNullOrEmpty(SiteName) ? $"{SiteName}-{m.Name}" : m.Name);
+
+    [GeneratedRegex("[^A-Za-z0-9.-]+")]
+    private static partial Regex InvalidHostNameChars();
+
+    /// <summary>把名稱轉成合法的主機名稱：不合法字元（例如底線）換成 -，每段最多 63 個字元。</summary>
+    public static string ToHostName(string name)
+    {
+        var labels = InvalidHostNameChars().Replace(name, "-")
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l =>
+            {
+                var t = l.Trim('-');
+                if (t.Length > 63) t = t[..63].TrimEnd('-');
+                return t;
+            })
+            .Where(l => l.Length > 0)
+            .ToList();
+        return labels.Count == 0 ? "pc" : string.Join('.', labels);
+    }
 
     public bool UsesBrowser => Enabled && BrowserEnabled;
     public bool UsesWarp => Enabled && WarpEnabled;

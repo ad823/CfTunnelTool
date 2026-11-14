@@ -219,6 +219,13 @@ static class SelfTest
         siteB.AuthDomain = "myteam.cloudflareaccess.com";
         siteB.UseOwnVnet = true; siteB.VnetId = "vnetB"; siteB.VnetName = "factory-b"; siteB.SiteName = "factory-b";
         Check("虛擬網路：獨立時目標名稱加上地點", siteA.TargetName(siteA.Machines[0]) == "factory-a-pc1");
+        var underscoreSite = Good();
+        underscoreSite.UseOwnVnet = true; underscoreSite.SiteName = "ApiServer_1F_test";
+        underscoreSite.Machines[0].Name = "HS";
+        Check("虛擬網路：目標名稱符合 RFC 1123（底線換成 -）", underscoreSite.TargetName(underscoreSite.Machines[0]) == "ApiServer-1F-test-HS",
+            underscoreSite.TargetName(underscoreSite.Machines[0]));
+        Check("主機名稱：其他不合法字元與長度", RdpConfig.ToHostName("_a__b_") == "a-b" && RdpConfig.ToHostName("___") == "pc"
+                                            && RdpConfig.ToHostName(new string('x', 80)).Length == 63 && RdpConfig.ToHostName("pc.1") == "pc.1");
         var defaultSite = Good(); defaultSite.SiteName = "x";
         Check("虛擬網路：預設時目標名稱不變（相容舊版）", defaultSite.TargetName(defaultSite.Machines[0]) == "pc1");
         var appA = JsonSerializer.Serialize(CloudflareClient.RdpAppBody("a", siteA, "P"));
