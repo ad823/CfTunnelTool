@@ -95,6 +95,13 @@ static class SelfTest
         Check("政策：mfa_config", policyJson.Contains("\"mfa_config\":{\"mfa_disabled\":false"));
         Check("應用程式：type rdp 與依 port 分組", appJson.Contains("\"type\":\"rdp\"") && appJson.Contains("\"port\":3389") && appJson.Contains("\"port\":3390"));
         Check("應用程式：target_attributes hostname", appJson.Contains("\"target_attributes\":{\"hostname\":[\"pc1\"]}"));
+        var launcherJson = JsonSerializer.Serialize(CloudflareClient.LauncherPolicyBody("l", rdpForJson));
+        sb.AppendLine("INFO  LauncherPolicyBody = " + launcherJson);
+        Check("App Launcher 政策：同一批 Email、不要求 MFA", launcherJson.Contains("a@example.com") && !launcherJson.Contains("mfa_config"));
+        var prev2 = new RdpConfig { LauncherAppId = "la", LauncherPolicyId = "lp" };
+        var cur2 = new RdpConfig();
+        RdpDeployer.CarryOverIds(cur2, prev2);
+        Check("CarryOverIds 帶入 App Launcher ID", cur2.LauncherAppId == "la" && cur2.LauncherPolicyId == "lp");
 
         // ---- 無效 Token 呼叫新 API ----
         using (var cf = new CloudflareClient("invalid-token-selftest"))

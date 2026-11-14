@@ -182,11 +182,13 @@ sealed partial class CloudflareClient
 
     // ---------- Access 政策 ----------
 
+    static List<object> EmailIncludes(RdpConfig rdp) => rdp.AllowedEmails.Select(e => e.StartsWith('@')
+        ? (object)new { email_domain = new { domain = e[1..] } }
+        : new { email = new { email = e } }).ToList();
+
     internal static object PolicyBody(string name, RdpConfig rdp)
     {
-        var include = rdp.AllowedEmails.Select(e => e.StartsWith('@')
-            ? (object)new { email_domain = new { domain = e[1..] } }
-            : new { email = new { email = e } }).ToList();
+        var include = EmailIncludes(rdp);
 
         var localToRemote = new List<string>();
         var remoteToLocal = new List<string>();
@@ -215,6 +217,42 @@ sealed partial class CloudflareClient
             },
         };
     }
+
+    /// <summary>App Launcher 的政策：只允許同一批 Email 登入，不要求 MFA（使用者要先能進來才能註冊 2FA 裝置）。</summary>
+    internal static object LauncherPolicyBody(string name, RdpConfig rdp) => new
+    {
+        name,
+        decision = "allow",
+        include = EmailIncludes(rdp),
+    };
+
+    public async Task<string> CreateLauncherPolicyAsync(string accountId, string name, RdpConfig rdp)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/policies", LauncherPolicyBody(name, rdp)))!["id"]!.GetValue<string>();
+
+    public async Task UpdateLauncherPolicyAsync(string accountId, string policyId, string name, RdpConfig rdp)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/policies/{policyId}", LauncherPolicyBody(name, rdp));
+
+    // ---------- App Launcher（使用者註冊 2FA 裝置的入口） ----------
+
+    static object LauncherAppBody(string policyId) => new
+    {
+        type = "app_launcher",
+        policies = new[] { new { id = policyId, precedence = 1 } },
+        session_duration = "24h",
+    };
+
+    /// <summary>找出帳號現有的 App Launcher（每個帳號最多一個）。</summary>
+    public async Task<string?> FindAppLauncherIdAsync(string accountId)
+    {
+        var list = await SendAsync(HttpMethod.Get, $"accounts/{accountId}/access/apps");
+        return list?.AsArray().FirstOrDefault(a => a?["type"]?.GetValue<string>() == "app_launcher")?["id"]?.GetValue<string>();
+    }
+
+    public async Task<string> CreateAppLauncherAsync(string accountId, string policyId)
+        => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/apps", LauncherAppBody(policyId)))!["id"]!.GetValue<string>();
+
+    public async Task UpdateAppLauncherAsync(string accountId, string appId, string policyId)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/apps/{appId}", LauncherAppBody(policyId));
 
     public async Task<string> CreatePolicyAsync(string accountId, string name, RdpConfig rdp)
         => (await SendAsync(HttpMethod.Post, $"accounts/{accountId}/access/policies", PolicyBody(name, rdp)))!["id"]!.GetValue<string>();

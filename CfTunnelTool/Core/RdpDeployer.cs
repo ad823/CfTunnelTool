@@ -41,6 +41,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         current.PolicyId ??= previous.PolicyId;
         current.VnetId ??= previous.VnetId;
         current.AuthDomain ??= previous.AuthDomain;
+        current.LauncherAppId ??= previous.LauncherAppId;
+        current.LauncherPolicyId ??= previous.LauncherPolicyId;
         foreach (var m in current.Machines)
         {
             var old = previous.Machines.FirstOrDefault(p => p.Name.Equals(m.Name, StringComparison.OrdinalIgnoreCase));
@@ -154,6 +156,11 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             }
         });
         log.Ok("瀏覽器遠端桌面已設定");
+
+        // ---- 8. App Launcher：使用者註冊 2FA 裝置的入口 ----
+        log.Step("設定 2FA 註冊入口（App Launcher）");
+        await WithPermission(PermApps, () => EnsureAppLauncherAsync(acc, rdp, config.TunnelName));
+
         foreach (var m in rdp.Machines)
             log.Info($"{m.Name}：{rdp.UrlFor(m)}");
         if (rdp.MfaEnrollUrl is { } enroll)
@@ -195,6 +202,41 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
                 "  4. 回到這裡按「重新部署」\n\n" +
                 "Cloudflare 回應：" + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 建立或更新 App Launcher，讓允許的使用者能登入 team 網域註冊 2FA 裝置。
+    /// 帳號已有不是本工具建立的 App Launcher 時不修改它，只提醒管理者確認政策。
+    /// </summary>
+    async Task EnsureAppLauncherAsync(string acc, RdpConfig rdp, string tunnelName)
+    {
+        var policyName = $"CfTunnelTool App Launcher - {tunnelName}";
+        if (rdp.LauncherPolicyId is not null && await cf.PolicyExistsAsync(acc, rdp.LauncherPolicyId))
+            await cf.UpdateLauncherPolicyAsync(acc, rdp.LauncherPolicyId, policyName, rdp);
+        else
+            rdp.LauncherPolicyId = await cf.CreateLauncherPolicyAsync(acc, policyName, rdp);
+
+        if (rdp.LauncherAppId is not null && await cf.AppExistsAsync(acc, rdp.LauncherAppId))
+        {
+            await cf.UpdateAppLauncherAsync(acc, rdp.LauncherAppId, rdp.LauncherPolicyId);
+            log.Ok("2FA 註冊入口已更新");
+            return;
+        }
+
+        var existing = await cf.FindAppLauncherIdAsync(acc);
+        if (existing is null)
+        {
+            rdp.LauncherAppId = await cf.CreateAppLauncherAsync(acc, rdp.LauncherPolicyId);
+            log.Ok("已建立 2FA 註冊入口（App Launcher）");
+            return;
+        }
+
+        // 帳號原本就有 App Launcher：不覆寫別人的設定，政策也不需要了
+        await cf.DeletePolicyAsync(acc, rdp.LauncherPolicyId);
+        rdp.LauncherPolicyId = null;
+        log.Warn("這個帳號原本就有 App Launcher（不是本工具建立的），沒有修改它。" +
+                 "請到 Zero Trust → Access controls → Applications → App Launcher 確認它的政策允許這些 Email：" +
+                 string.Join("、", rdp.AllowedEmails) + "，否則使用者無法註冊 2FA。");
     }
 
     async Task EnsureRouteAsync(string acc, RdpMachine m, string tunnelId, string vnetId, string tunnelName)
@@ -300,6 +342,11 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             log.Ok("已刪除遠端桌面應用程式");
         if (rdp.PolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.PolicyId))
             log.Ok("已刪除登入政策");
+        if (rdp.LauncherAppId is not null && await cf.DeleteAppAsync(acc, rdp.LauncherAppId))
+            log.Ok("已刪除 2FA 註冊入口（App Launcher）");
+        if (rdp.LauncherPolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.LauncherPolicyId))
+            log.Ok("已刪除 App Launcher 政策");
+        rdp.LauncherAppId = rdp.LauncherPolicyId = null;
         foreach (var m in rdp.Machines)
             await RemoveMachineAsync(acc, m);
         if (!string.IsNullOrEmpty(rdp.Hostname))

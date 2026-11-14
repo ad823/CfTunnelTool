@@ -53,6 +53,10 @@ sealed partial class RdpConfig
     public string? PolicyId { get; set; }
     public string? VnetId { get; set; }
 
+    /// <summary>由本工具建立的 App Launcher（使用者註冊 2FA 的入口）與其政策。</summary>
+    public string? LauncherAppId { get; set; }
+    public string? LauncherPolicyId { get; set; }
+
     /// <summary>Zero Trust 組織網域，例如 myteam.cloudflareaccess.com，用來組 2FA 註冊網址。</summary>
     public string? AuthDomain { get; set; }
 
