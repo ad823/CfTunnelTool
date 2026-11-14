@@ -93,6 +93,7 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             else
                 log.Warn($"{m.Name}（{m.Ip}:{m.Port}）目前連不到，請確認該電腦已開機、已啟用遠端桌面、防火牆允許 {m.Port}");
         }
+        await RestrictLocalFirewallAsync(rdp);
 
         // ---- 3. 私有網路路由 ----
         log.Step("設定私有網路路由");
@@ -225,6 +226,40 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         if (rdp.PolicyId is not null && await cf.DeletePolicyAsync(acc, rdp.PolicyId)) log.Ok("已刪除瀏覽器登入政策");
         if (!string.IsNullOrEmpty(rdp.Hostname)) await DeleteRdpDnsAsync(zone.ZoneId, rdp.Hostname);
         rdp.AppId = rdp.PolicyId = null;
+    }
+
+    /// <summary>
+    /// 中繼電腦本身也在開放清單時：把它的遠端桌面防火牆來源限制為內部網路，
+    /// 避免路由器轉送或 UPnP 讓網際網路繞過 Cloudflare 直接連進來。其他電腦請在該電腦上用「這台電腦要被遠端連線」設定。
+    /// </summary>
+    async Task RestrictLocalFirewallAsync(RdpConfig rdp)
+    {
+        var thisIp = RdpHost.GetLanIPv4();
+        if (thisIp is null || rdp.Machines.FirstOrDefault(m => m.Ip == thisIp) is not { } self) return;
+        var host = RdpHost.GetStatus();
+        if (!host.Enabled) return;
+
+        try
+        {
+            var open = await Task.Run(() => RdpHost.GetOpenFirewallRules(host.Port));
+            if (open is null)
+            {
+                log.Warn("讀不到這台電腦的防火牆規則，請手動確認遠端桌面只允許區網連線");
+                return;
+            }
+            if (open.Count == 0)
+            {
+                log.Ok($"{self.Name}（這台電腦）的遠端桌面防火牆只允許內部網路連線");
+                return;
+            }
+            var n = await Task.Run(() => RdpHost.RestrictFirewallToInternal(host.Port));
+            log.Ok($"{self.Name}（這台電腦）的遠端桌面防火牆已改為只允許內部網路連線（修改 {n} 條規則：" +
+                   string.Join("、", open.Select(r => r.DisplayName)) + "）");
+        }
+        catch (InvalidOperationException ex)
+        {
+            log.Warn(ex.Message);
+        }
     }
 
     // ================= WARP ＋ 遠端桌面連線 =================

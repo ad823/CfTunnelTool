@@ -401,6 +401,19 @@ static class SelfTest
         Check("Gateway：舊設定檔的 Gateway 規則 ID 會帶入",
             new Func<bool>(() => { var cur = Good(); RdpDeployer.CarryOverIds(cur, new RdpConfig { GatewayRuleId = "gw" }); return cur.GatewayRuleId == "gw"; })());
 
+        // ---- v1.7.4：遠端桌面防火牆只允許內部網路（只讀取，不修改本機防火牆） ----
+        var fwScript = RdpHost.OpenRulesScript(3389);
+        Check("防火牆：同時找內建規則群組與開放同連接埠的規則",
+            fwScript.Contains("@FirewallAPI.dll,-28752") && fwScript.Contains("-contains '3389'"), fwScript);
+        Check("防火牆：只挑啟用、輸入、允許且來源為任何的規則",
+            fwScript.Contains("'Inbound'") && fwScript.Contains("'Allow'") && fwScript.Contains("-contains 'Any'"));
+        Check("防火牆：允許來源不含任何公網位址",
+            !RdpHost.InternalAddresses.Contains("Any") && RdpHost.InternalAddresses.Contains("LocalSubnet") &&
+            RdpHost.InternalAddresses.Contains("192.168.0.0/16"));
+        var fwOpen = RdpHost.GetOpenFirewallRules(status.Port);
+        sb.AppendLine("INFO  GetOpenFirewallRules = " + (fwOpen is null ? "null" : string.Join(" | ", fwOpen.Select(r => $"{r.Name}={r.DisplayName}"))));
+        Check("防火牆：讀得到本機規則", fwOpen is not null);
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

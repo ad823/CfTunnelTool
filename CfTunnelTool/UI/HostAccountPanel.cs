@@ -10,6 +10,9 @@ sealed class HostAccountPanel : TableLayoutPanel
 {
     readonly Label _hostStatus;
     readonly Button _enableHost;
+    readonly Label _firewallStatus;
+    readonly Button _restrictFirewall;
+    int _firewallCheck;
     readonly ComboBox _account;
     readonly TextBox _pwd1, _pwd2;
     readonly CheckBox _keepAutoLogon;
@@ -35,6 +38,11 @@ sealed class HostAccountPanel : TableLayoutPanel
         var openSettings = Theme.SecondaryButton("Windows 遠端桌面設定 ↗");
         openSettings.Click += (_, _) => RdpHost.OpenSettings();
         AddFlow(_hostStatus, _enableHost, openSettings);
+        _firewallStatus = Inline("");
+        _restrictFirewall = Theme.SecondaryButton("只允許內部網路連線");
+        _restrictFirewall.Visible = false;
+        _restrictFirewall.Click += async (_, _) => await RestrictFirewallAsync();
+        AddFlow(Inline("防火牆來源："), _firewallStatus, _restrictFirewall);
 
         // ---- 遠端登入密碼 ----
         AddText("這台電腦的遠端登入密碼：", Theme.Bold, top: 12);
@@ -149,9 +157,70 @@ sealed class HostAccountPanel : TableLayoutPanel
             _enableHost.Visible = false;
         }
 
+        _ = RefreshFirewallAsync(s);
+
         _returnHint.Text = SelfInstaller.HasReturnConsoleShortcut ? "✓ 已建立" : "";
         _returnHint.ForeColor = Theme.Success;
         if (_account.Items.Count > 0) UpdateAccountHint();
+    }
+
+    /// <summary>在背景讀取防火牆規則（PowerShell 需要數秒），只採用最後一次檢查的結果。</summary>
+    async Task RefreshFirewallAsync(RdpHostStatus s)
+    {
+        var check = ++_firewallCheck;
+        _restrictFirewall.Visible = false;
+        if (s.IsHomeEdition || !s.Enabled)
+        {
+            _firewallStatus.Text = "—";
+            _firewallStatus.ForeColor = Theme.Muted;
+            return;
+        }
+
+        _firewallStatus.Text = "檢查中…";
+        _firewallStatus.ForeColor = Theme.Muted;
+        var open = await Task.Run(() => RdpHost.GetOpenFirewallRules(s.Port));
+        if (IsDisposed || check != _firewallCheck) return;
+
+        if (open is null)
+        {
+            _firewallStatus.Text = "! 讀不到防火牆規則，請手動確認遠端桌面只允許區網連線";
+            _firewallStatus.ForeColor = Theme.Warning;
+        }
+        else if (open.Count == 0)
+        {
+            _firewallStatus.Text = "✓ 只允許內部網路（區網與私有 IP），網際網路無法直接連進來";
+            _firewallStatus.ForeColor = Theme.Success;
+        }
+        else
+        {
+            _firewallStatus.Text = "✗ 允許任何來源：路由器有轉送或 UPnP 時，網際網路可以直接連進來嘗試登入";
+            _firewallStatus.ForeColor = Theme.Danger;
+            _restrictFirewall.Visible = true;
+        }
+    }
+
+    async Task RestrictFirewallAsync()
+    {
+        _restrictFirewall.Enabled = false;
+        try
+        {
+            var port = RdpHost.GetStatus().Port;
+            var n = await Task.Run(() => RdpHost.RestrictFirewallToInternal(port));
+            MessageBox.Show(FindForm(),
+                $"已把 {n} 條遠端桌面防火牆規則改為只允許內部網路連線（同網段與私有 IP）。\n\n" +
+                "經 Cloudflare 連進來的使用者不受影響；網際網路直接連到這台電腦的嘗試會被擋掉。\n" +
+                "也建議到路由器關閉 3389 的連接埠轉送、DMZ 與 UPnP。",
+                "遠端桌面防火牆", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show(FindForm(), ex.Message, "遠端桌面防火牆", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _restrictFirewall.Enabled = true;
+            RefreshStatus();
+        }
     }
 
     protected override void OnEnabledChanged(EventArgs e)
@@ -166,7 +235,7 @@ sealed class HostAccountPanel : TableLayoutPanel
         try
         {
             await Task.Run(RdpHost.EnableRemoteDesktop);
-            MessageBox.Show(FindForm(), "已啟用這台電腦的遠端桌面，並開放防火牆規則。", "遠端桌面",
+            MessageBox.Show(FindForm(), "已啟用這台電腦的遠端桌面，並開放防火牆規則（只允許內部網路連線）。", "遠端桌面",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.Security.SecurityException)
