@@ -52,6 +52,14 @@ CfTunnelTool 使用說明
   2. 依畫面註冊 2FA（例如用手機 Google / Microsoft Authenticator 掃描 QR Code）
   3. 之後開啟各台電腦的連線網址，依序輸入 Email 驗證碼、2FA 驗證碼、Windows 帳號密碼
 
+  Windows 帳號密碼：
+  - 遠端桌面一定要用「有密碼」的 Windows 帳號登入，空白密碼的帳號會被 Windows 拒絕
+  - 原本是空白密碼、開機自動登入的電腦：在精靈「遠端桌面」步驟下方的
+    「這台電腦的遠端登入密碼」設定密碼，並勾選「保留開機自動登入」，
+    在電腦前面使用時仍然不用輸入密碼（自動登入的密碼由 Windows 加密保存）
+  - 遠端登入時，帳號輸入「電腦名稱\帳號」（程式畫面會顯示正確格式）
+  - Microsoft 帳號：帳號輸入 MicrosoftAccount\信箱，密碼輸入 Microsoft 帳號密碼（不是 PIN）
+
   被開放的電腦需要：
   - Windows 專業版 / 企業版 / Server（家用版不能當遠端桌面主機）
   - 已啟用遠端桌面（精靈可以一鍵啟用這台電腦）

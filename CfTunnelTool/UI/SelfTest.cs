@@ -38,6 +38,16 @@ static class SelfTest
             Check("TestTcpAsync 結果與 RDP 啟用狀態一致", open == status.Enabled, $"{ip}:{status.Port} open={open} enabled={status.Enabled}");
         }
 
+        // ---- 本機帳號（只讀，不會修改密碼或自動登入） ----
+        var users = LocalAccount.ListUsers();
+        var me = LocalAccount.CurrentUserName();
+        Check("ListUsers 讀得到帳號", users.Count > 0, $"{users.Count} 個");
+        Check("ListUsers 包含目前帳號", users.Any(u => u.Name.Equals(me, StringComparison.OrdinalIgnoreCase)));
+        Check("ListUsers 有帳號來源", users.All(u => u.Source.Length > 0), string.Join(", ", users.Select(u => u.Source).Distinct()));
+        var auto = LocalAccount.GetAutoLogon();
+        Check("GetAutoLogon 可讀取", true, auto.Enabled ? "已啟用" : "未啟用");
+        Check("RemoteLoginName 格式", LocalAccount.RemoteLoginName("u") == $"{Environment.MachineName}\\u");
+
         // ---- RdpConfig / ToolConfig 驗證 ----
         RdpConfig Good() => new()
         {
