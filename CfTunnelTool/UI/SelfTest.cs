@@ -368,6 +368,18 @@ static class SelfTest
         Check("組織：已經是 8h 且 2FA 已允許 → 不需要更新", CloudflareClient.OrganizationBody(org, ["totp"], "8h") is null);
         Check("組織：新增 2FA 方式時仍保留 8h", CloudflareClient.OrganizationBody(org, ["totp", "security_key"], "8h")?["session_duration"]?.ToString() == "8h");
 
+        // ---- v1.7.2：WARP 裝置註冊也要 2FA ----
+        Check("註冊 2FA：WARP 政策判定為要求 MFA",
+            CloudflareClient.PolicyRequiresMfa(System.Text.Json.Nodes.JsonNode.Parse(warpPolicyJson)));
+        Check("註冊 2FA：App Launcher 政策判定為不要求 MFA",
+            !CloudflareClient.PolicyRequiresMfa(System.Text.Json.Nodes.JsonNode.Parse(launcherJson)));
+        Check("註冊 2FA：mfa_disabled=true 判定為不要求 MFA",
+            !CloudflareClient.PolicyRequiresMfa(System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"mfa_config\":{\"mfa_disabled\":true,\"allowed_authenticators\":[\"totp\"]}}")));
+        Check("註冊 2FA：沒有允許的驗證方式判定為不要求 MFA",
+            !CloudflareClient.PolicyRequiresMfa(System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"mfa_config\":{\"mfa_disabled\":false,\"allowed_authenticators\":[]}}")));
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {
