@@ -64,6 +64,8 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 有完整步驟和第一
 
 兩種連線方式可以各自開啟，共用同一份電腦清單與允許登入的 Email。不論哪一種，都要依序通過 **Email 驗證碼 → 2FA → Windows 帳號密碼**。
 
+**Email 驗證碼與 2FA 分開計時**（v1.7.1）：Email 驗證碼預設每 8 小時輸入一次（Zero Trust 組織的全域登入時間，整個 Cloudflare 帳號共用），2FA 預設每次連線都要。做法是把組織的 `session_duration` 設為 Email 驗證碼的時間，應用程式的工作階段設短（5 分鐘），並在應用程式與政策兩層都設定 `mfa_config`。
+
 | | WARP ＋ 遠端桌面連線（建議） | 瀏覽器 |
 |---|---|---|
 | 使用者端 | 安裝 Cloudflare WARP（CfTunnelTool 使用者模式自動安裝） | 只要瀏覽器 |

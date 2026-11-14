@@ -18,7 +18,7 @@ sealed partial class RdpStep : StepPage
     readonly Button _test;
     readonly TextBox _emails;
     readonly CheckBox _totp, _securityKey, _biometrics;
-    readonly ComboBox _session;
+    readonly ComboBox _session, _login;
     readonly CheckBox _clipText, _fileUpload, _fileDownload;
     readonly HostAccountPanel _host;
     bool _loaded;
@@ -104,6 +104,12 @@ sealed partial class RdpStep : StepPage
         _session = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, Margin = new Padding(0, 4, 0, 0) };
         foreach (var d in RdpConfig.SessionDurations) _session.Items.Add(RdpDeployer.SessionName(d));
         S(AddRow(InlineLabel("重新驗證 2FA："), _session));
+
+        _login = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, Margin = new Padding(0, 4, 0, 0) };
+        foreach (var d in RdpConfig.LoginDurations) _login.Items.Add(RdpDeployer.LoginName(d) + "輸入一次");
+        S(AddRow(InlineLabel("Email 驗證碼："), _login));
+        S(AddText("Email 驗證碼的有效時間是 Cloudflare Zero Trust 的全域登入時間，同一個帳號的所有應用程式共用。" +
+                  "在有效時間內重新連線，只需要再做 2FA。", Theme.Small, Theme.Muted, top: 2, bottom: 0));
 
         // ---- 剪貼簿與檔案 ----
         S(AddText("剪貼簿與檔案傳輸：", Theme.Bold, top: 12, bottom: 2));
@@ -319,6 +325,7 @@ sealed partial class RdpStep : StepPage
                 _securityKey.Checked = rdp.MfaMethods.Contains("security_key");
                 _biometrics.Checked = rdp.MfaMethods.Contains("biometrics");
                 _session.SelectedIndex = Math.Max(0, Array.IndexOf(RdpConfig.SessionDurations, rdp.MfaSessionDuration));
+                _login.SelectedIndex = Math.Max(0, Array.IndexOf(RdpConfig.LoginDurations, rdp.LoginSessionDuration));
                 _clipText.Checked = rdp.ClipboardText;
                 _fileUpload.Checked = rdp.FileUpload;
                 _fileDownload.Checked = rdp.FileDownload;
@@ -326,7 +333,8 @@ sealed partial class RdpStep : StepPage
             else
             {
                 _sub.Text = "rdp";
-                _session.SelectedIndex = Array.IndexOf(RdpConfig.SessionDurations, "8h");
+                _session.SelectedIndex = Array.IndexOf(RdpConfig.SessionDurations, "0m"); // 預設每次連線都要 2FA
+                _login.SelectedIndex = Array.IndexOf(RdpConfig.LoginDurations, "8h");
                 AddThisComputer(focus: false);
             }
             UpdateEnabled();
@@ -349,6 +357,7 @@ sealed partial class RdpStep : StepPage
             MfaMethods = new[] { (_totp, "totp"), (_securityKey, "security_key"), (_biometrics, "biometrics") }
                 .Where(x => x.Item1.Checked).Select(x => x.Item2).ToList(),
             MfaSessionDuration = RdpConfig.SessionDurations[Math.Max(0, _session.SelectedIndex)],
+            LoginSessionDuration = RdpConfig.LoginDurations[Math.Max(0, _login.SelectedIndex)],
             ClipboardText = _clipText.Checked,
             FileUpload = _fileUpload.Checked,
             FileDownload = _fileDownload.Checked,

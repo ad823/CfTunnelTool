@@ -58,11 +58,39 @@ sealed partial class CloudflareClient
     /// 但 GET 會回傳唯讀欄位與空值，原封不動送回會被拒絕（12062 invalid_org_config），所以先清掉。
     /// 失敗時拋出的例外訊息會列出送出的欄位名稱（不含值），方便排查。
     /// </summary>
-    public async Task EnsureOrganizationMfaAsync(string accountId, AccessOrganization org, IEnumerable<string> methods)
+    public async Task EnsureOrganizationMfaAsync(string accountId, AccessOrganization org, IEnumerable<string> methods,
+        string? loginSessionDuration = null)
+    {
+        var body = OrganizationBody(org, methods, loginSessionDuration);
+        if (body is null) return; // 已經是想要的設定
+        var mfa = body["mfa_config"] as JsonObject ?? new JsonObject();
+
+        try
+        {
+            await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/organizations", body);
+        }
+        catch (CloudflareApiException ex) when (!ex.IsForbidden)
+        {
+            throw new CloudflareApiException(
+                $"{ex.Message}\n（送出的組織欄位：{string.Join(", ", body.Select(p => p.Key))}；mfa_config：{string.Join(", ", mfa.Select(p => p.Key))}）",
+                ex.StatusCode, ex.Codes);
+        }
+    }
+
+    /// <summary>組織目前的全域登入時間（Email 驗證碼的有效時間）。</summary>
+    public static string? GetOrganizationSessionDuration(AccessOrganization org) =>
+        org.Raw["session_duration"] is JsonValue v ? v.ToString() : null;
+
+    /// <summary>
+    /// 組出要 PUT 的組織設定；已經符合時回傳 null（不需要更新）。
+    /// <paramref name="loginSessionDuration"/> 是全域登入時間：在這段時間內，使用者不必重新輸入 Email 驗證碼。
+    /// </summary>
+    internal static JsonObject? OrganizationBody(AccessOrganization org, IEnumerable<string> methods, string? loginSessionDuration)
     {
         var allowed = GetOrganizationMfaMethods(org);
         var wanted = methods.ToList();
-        if (wanted.All(allowed.Contains) && org.Raw["mfa_config"] is not null) return; // 已經都允許
+        var sessionOk = string.IsNullOrEmpty(loginSessionDuration) || GetOrganizationSessionDuration(org) == loginSessionDuration;
+        if (wanted.All(allowed.Contains) && org.Raw["mfa_config"] is not null && sessionOk) return null;
 
         var body = (JsonObject)org.Raw.DeepClone();
         string[] readOnly = ["created_at", "updated_at", "is_ui_read_only", "ui_read_only_toggle_reason"];
@@ -78,17 +106,8 @@ sealed partial class CloudflareClient
         if (mfa["session_duration"] is null || mfa["session_duration"]!.ToString() == "") mfa["session_duration"] = "24h";
         body["mfa_config"] = mfa;
         body["mfa_required_for_all_apps"] ??= false;
-
-        try
-        {
-            await SendAsync(HttpMethod.Put, $"accounts/{accountId}/access/organizations", body);
-        }
-        catch (CloudflareApiException ex) when (!ex.IsForbidden)
-        {
-            throw new CloudflareApiException(
-                $"{ex.Message}\n（送出的組織欄位：{string.Join(", ", body.Select(p => p.Key))}；mfa_config：{string.Join(", ", mfa.Select(p => p.Key))}）",
-                ex.StatusCode, ex.Codes);
-        }
+        if (!string.IsNullOrEmpty(loginSessionDuration)) body["session_duration"] = loginSessionDuration;
+        return body;
     }
 
     // ---------- 登入方式（Identity Provider） ----------
@@ -327,8 +346,18 @@ sealed partial class CloudflareClient
             vnet_id = rdp.VnetId,
         }).ToArray(),
         policies = new[] { new { id = policyId, precedence = 1 } },
-        session_duration = rdp.MfaSessionDuration == "0m" ? "1h" : rdp.MfaSessionDuration,
+        // 應用程式工作階段短 → 每次新連線都回到 Access 檢查；Email 驗證碼由組織全域登入時間決定
+        session_duration = rdp.AppSessionDuration,
+        mfa_config = AppMfaConfig(rdp),
         app_launcher_visible = false,
+    };
+
+    /// <summary>應用程式層的 2FA 設定（與政策層相同；政策層優先，兩層都設比較保險）。</summary>
+    static object AppMfaConfig(RdpConfig rdp) => new
+    {
+        mfa_disabled = false,
+        allowed_authenticators = rdp.MfaMethods,
+        session_duration = rdp.MfaSessionDuration,
     };
 
     public async Task<string> CreatePrivateRdpAppAsync(string accountId, string name, RdpConfig rdp, string policyId)
@@ -453,7 +482,8 @@ sealed partial class CloudflareClient
             destinations = new[] { new { type = "public", uri = rdp.Hostname } },
             target_criteria = criteria,
             policies = new[] { new { id = policyId, precedence = 1 } },
-            session_duration = "8h",
+            session_duration = rdp.AppSessionDuration,
+            mfa_config = AppMfaConfig(rdp),
             app_launcher_visible = true,
             allow_authenticate_via_warp = false,
         };

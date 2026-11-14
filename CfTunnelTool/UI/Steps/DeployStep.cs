@@ -58,7 +58,7 @@ sealed class DeployStep : StepPage
             Rdp = rdp is null ? null : new
             {
                 rdp.Enabled, rdp.BrowserEnabled, rdp.WarpEnabled, rdp.UseOwnVnet, rdp.Hostname, rdp.AllowedEmails, rdp.MfaMethods, rdp.MfaSessionDuration,
-                rdp.ClipboardText, rdp.FileUpload, rdp.FileDownload,
+                rdp.LoginSessionDuration, rdp.ClipboardText, rdp.FileUpload, rdp.FileDownload,
                 Machines = rdp.Machines.Select(m => new { m.Name, m.Ip, m.Port }),
             },
         });
@@ -83,6 +83,7 @@ sealed class DeployStep : StepPage
             lines.AddRange(rdp.Machines.Select(m => $"      {m.Name}  →  {m.Ip}:{m.Port}"));
             lines.Add($"允許登入：{string.Join("、", rdp.AllowedEmails)}");
             lines.Add($"2FA：{string.Join("、", rdp.MfaMethods.Select(RdpDeployer.MfaMethodName))}（{RdpDeployer.SessionName(rdp.MfaSessionDuration)}）");
+            lines.Add($"Email 驗證碼：{RdpDeployer.LoginName(rdp.LoginSessionDuration)}輸入一次（整個 Cloudflare 帳號共用）");
         }
         else if (_state.Rdp is { Enabled: false, AppId: not null })
         {

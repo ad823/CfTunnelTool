@@ -384,8 +384,22 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
     {
         try
         {
-            await WithPermission(PermOrg, () => cf.EnsureOrganizationMfaAsync(acc, org, rdp.MfaMethods));
-            log.Ok($"組織 2FA 已啟用：{string.Join("、", rdp.MfaMethods.Select(MfaMethodName))}");
+            try
+            {
+                await WithPermission(PermOrg, () => cf.EnsureOrganizationMfaAsync(acc, org, rdp.MfaMethods, rdp.LoginSessionDuration));
+                log.Ok($"組織 2FA 已啟用：{string.Join("、", rdp.MfaMethods.Select(MfaMethodName))}");
+                log.Ok($"Email 驗證碼：{LoginName(rdp.LoginSessionDuration)}輸入一次；2FA：{SessionName(rdp.MfaSessionDuration)}");
+                log.Info("（Email 驗證碼的有效時間是 Zero Trust 組織的全域登入時間，同一個 Cloudflare 帳號的所有應用程式共用。）");
+            }
+            catch (CloudflareApiException ex) when (!ex.IsForbidden && !string.IsNullOrEmpty(rdp.LoginSessionDuration))
+            {
+                // 全域登入時間設不進去時，至少先把 2FA 設好
+                await WithPermission(PermOrg, () => cf.EnsureOrganizationMfaAsync(acc, org, rdp.MfaMethods));
+                log.Ok($"組織 2FA 已啟用：{string.Join("、", rdp.MfaMethods.Select(MfaMethodName))}");
+                log.Warn("無法自動設定 Email 驗證碼的有效時間（全域登入時間），請到 Zero Trust 後台 → Access settings → " +
+                         $"Global session timeout 設為 {LoginName(rdp.LoginSessionDuration)}。");
+                log.Info(ex.Message);
+            }
             return;
         }
         catch (CloudflareApiException ex) when (!ex.IsForbidden)
@@ -676,6 +690,16 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
         "1h" => "每 1 小時重新驗證",
         "8h" => "每 8 小時重新驗證",
         "24h" => "每 24 小時重新驗證",
+        _ => duration,
+    };
+
+    /// <summary>Email 驗證碼有效時間的顯示文字，例如「每 8 小時」。</summary>
+    public static string LoginName(string duration) => duration switch
+    {
+        "1h" => "每 1 小時",
+        "8h" => "每 8 小時",
+        "24h" => "每 24 小時",
+        "168h" => "每 7 天",
         _ => duration,
     };
 }

@@ -341,6 +341,33 @@ static class SelfTest
         Check("WARP 政策：有 mfa_config、沒有 connection_rules", warpPolicyJson.Contains("\"mfa_config\"") && !warpPolicyJson.Contains("connection_rules"));
         Check("WARP 應用程式：private destination", privateAppJson.Contains("\"type\":\"private\",\"cidr\":\"192.168.1.10/32\",\"port_range\":\"3389\",\"l4_protocol\":\"tcp\",\"vnet_id\":\"vnet1\""));
 
+        // ---- Email 驗證碼（全域登入）與 2FA 分開 ----
+        var everyTime = codeSrc.Clone();
+        everyTime.MfaSessionDuration = "0m";
+        var everyPrivate = JsonSerializer.Serialize(CloudflareClient.PrivateRdpAppBody("a", everyTime, "POL"));
+        var everyBrowser = JsonSerializer.Serialize(CloudflareClient.RdpAppBody("b", everyTime, "POL"));
+        Check("2FA 每次：WARP 應用程式工作階段 5 分鐘＋應用程式層 mfa_config",
+            everyPrivate.Contains("\"session_duration\":\"5m\"") && everyPrivate.Contains("\"mfa_config\":{\"mfa_disabled\":false") &&
+            everyPrivate.Contains("\"session_duration\":\"0m\""), everyPrivate);
+        Check("2FA 每次：瀏覽器應用程式工作階段 5 分鐘＋mfa_config",
+            everyBrowser.Contains("\"session_duration\":\"5m\"") && everyBrowser.Contains("\"mfa_config\""));
+        everyTime.MfaSessionDuration = "8h";
+        Check("2FA 8 小時：應用程式工作階段 8 小時", JsonSerializer.Serialize(CloudflareClient.PrivateRdpAppBody("a", everyTime, "POL")).Contains("\"session_duration\":\"8h\""));
+        Check("舊設定檔沒有 Email 驗證碼時間 → 預設 8 小時",
+            JsonSerializer.Deserialize<RdpConfig>("{\"Enabled\":true}")!.LoginSessionDuration == "8h");
+
+        var orgRaw = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
+            "{\"auth_domain\":\"t.cloudflareaccess.com\",\"name\":\"t\",\"session_duration\":\"24h\",\"created_at\":\"x\"," +
+            "\"mfa_config\":{\"allowed_authenticators\":[\"totp\"],\"session_duration\":\"24h\"}}")!;
+        var org = new AccessOrganization("t.cloudflareaccess.com", orgRaw);
+        var orgBody = CloudflareClient.OrganizationBody(org, ["totp"], "8h");
+        Check("組織：全域登入時間改為 8h、移除唯讀欄位",
+            orgBody?["session_duration"]?.ToString() == "8h" && orgBody["created_at"] is null &&
+            orgBody["mfa_config"]?["allowed_authenticators"]?.AsArray().Count == 1, orgBody?.ToJsonString() ?? "null");
+        orgRaw["session_duration"] = "8h";
+        Check("組織：已經是 8h 且 2FA 已允許 → 不需要更新", CloudflareClient.OrganizationBody(org, ["totp"], "8h") is null);
+        Check("組織：新增 2FA 方式時仍保留 8h", CloudflareClient.OrganizationBody(org, ["totp", "security_key"], "8h")?["session_duration"]?.ToString() == "8h");
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

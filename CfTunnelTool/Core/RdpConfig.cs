@@ -27,6 +27,9 @@ sealed partial class RdpConfig
     public static readonly string[] AllMfaMethods = ["totp", "security_key", "biometrics"];
     public static readonly string[] SessionDurations = ["0m", "1h", "8h", "24h"];
 
+    /// <summary>Email 驗證碼（Zero Trust 全域登入）的有效時間選項。</summary>
+    public static readonly string[] LoginDurations = ["1h", "8h", "24h", "168h"];
+
     /// <summary>停用時保留這份設定，部署時才知道要清掉哪些 Cloudflare 資源。</summary>
     public bool Enabled { get; set; }
 
@@ -91,6 +94,18 @@ sealed partial class RdpConfig
 
     /// <summary>多久需要重新做一次 2FA，0m 代表每次都要。</summary>
     public string MfaSessionDuration { get; set; } = "8h";
+
+    /// <summary>
+    /// Email 驗證碼多久要重新輸入一次。對應 Zero Trust 組織的全域登入時間（整個 Cloudflare 帳號共用）。
+    /// 在這段時間內重新連線，只需要再做 2FA，不會再寄驗證碼。
+    /// </summary>
+    public string LoginSessionDuration { get; set; } = "8h";
+
+    /// <summary>
+    /// 應用程式本身的工作階段時間。2FA 選「每次」時設很短（5 分鐘），
+    /// 這樣每次新連線都會重新做 2FA，但 Email 驗證碼仍由全域登入時間決定。
+    /// </summary>
+    public string AppSessionDuration => MfaSessionDuration == "0m" ? "5m" : MfaSessionDuration;
 
     public bool ClipboardText { get; set; } = true;
     public bool FileUpload { get; set; } = true;
@@ -167,6 +182,8 @@ sealed partial class RdpConfig
             throw new InvalidOperationException("請至少選擇一種 2FA 驗證方式。");
         if (!SessionDurations.Contains(MfaSessionDuration))
             MfaSessionDuration = "8h";
+        if (!LoginDurations.Contains(LoginSessionDuration))
+            LoginSessionDuration = "8h";
 
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var endpoints = new HashSet<string>();
