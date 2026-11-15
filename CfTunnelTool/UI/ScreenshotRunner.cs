@@ -123,6 +123,28 @@ static class ScreenshotRunner
         Capture(edit, Path.Combine(dir, "machine-edit.png"));
         edit.Close();
 
+        // 管理帳號密碼視窗：暫存的密碼檔，不影響本機設定
+        var authPath = Path.Combine(Path.GetTempPath(), $"cftunnel-shots-admin-{Guid.NewGuid():N}.dat");
+        try
+        {
+            var auth = new AdminAuth(authPath);
+            var demoConfig = new ToolConfig { Domain = "yourdomain.com", TunnelName = "office-pc" };
+            foreach (var (mode, name) in new[] { (AdminLoginMode.Setup, "admin-setup"), (AdminLoginMode.Reset, "admin-reset"),
+                                                 (AdminLoginMode.Login, "admin-login"), (AdminLoginMode.ChangePassword, "admin-change") })
+            {
+                if (mode == AdminLoginMode.Login) auth.Create("admin", "DemoPassword1");
+                var f = new AdminLoginForm(mode, demoConfig, auth) { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
+                f.Show();
+                Pump(500);
+                Capture(f, Path.Combine(dir, name + ".png"));
+                f.Close();
+            }
+        }
+        finally
+        {
+            try { File.Delete(authPath); } catch (IOException) { }
+        }
+
         // 紀錄視窗：用暫存資料夾的假資料
         var realRoot = Core.Logs.LogStore.Root;
         Core.Logs.LogStore.Root = Path.Combine(Path.GetTempPath(), "cftunnel-shots-logs-" + Guid.NewGuid().ToString("N"));

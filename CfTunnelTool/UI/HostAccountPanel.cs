@@ -13,6 +13,8 @@ sealed class HostAccountPanel : TableLayoutPanel
     readonly Label _firewallStatus;
     readonly Button _restrictFirewall;
     int _firewallCheck;
+    readonly Label _nlaStatus;
+    readonly Label _nlaHelp;
     readonly ComboBox _account;
     readonly TextBox _pwd1, _pwd2;
     readonly CheckBox _keepAutoLogon;
@@ -43,6 +45,10 @@ sealed class HostAccountPanel : TableLayoutPanel
         _restrictFirewall.Visible = false;
         _restrictFirewall.Click += async (_, _) => await RestrictFirewallAsync();
         AddFlow(Inline("防火牆來源："), _firewallStatus, _restrictFirewall);
+        _nlaStatus = Inline("");
+        AddFlow(Inline("NLA（網路層級驗證）："), _nlaStatus);
+        _nlaHelp = AddText(RdpHost.NlaPolicyHelp, Theme.Small, Theme.Danger);
+        _nlaHelp.Visible = false;
 
         // ---- 遠端登入密碼 ----
         AddText("這台電腦的遠端登入密碼：", Theme.Bold, top: 12);
@@ -150,18 +156,61 @@ sealed class HostAccountPanel : TableLayoutPanel
         }
         else
         {
-            var notes = new List<string> { $"✓ 已啟用（連接埠 {s.Port}" + (s.NlaRequired ? "，NLA 開啟）" : "）") };
+            var notes = new List<string> { $"✓ 已啟用（連接埠 {s.Port}）" };
             if (!s.SecurityLayerOk) notes.Add("! 安全性層是舊的「RDP」模式，瀏覽器無法連線，請改為「協商」或「SSL」");
             _hostStatus.Text = string.Join("　", notes);
             _hostStatus.ForeColor = s.SecurityLayerOk ? Theme.Success : Theme.Warning;
             _enableHost.Visible = false;
         }
 
+        RefreshNla(s);
         _ = RefreshFirewallAsync(s);
 
         _returnHint.Text = SelfInstaller.HasReturnConsoleShortcut ? "✓ 已建立" : "";
         _returnHint.ForeColor = Theme.Success;
         if (_account.Items.Count > 0) UpdateAccountHint();
+    }
+
+    /// <summary>NLA 沒開時自動開啟（群組原則強制關閉時只提示，不覆寫）。</summary>
+    void RefreshNla(RdpHostStatus s)
+    {
+        _nlaHelp.Visible = false;
+        if (s.IsHomeEdition || !s.Enabled)
+        {
+            _nlaStatus.Text = "—";
+            _nlaStatus.ForeColor = Theme.Muted;
+            return;
+        }
+
+        NlaResult result;
+        try
+        {
+            result = RdpHost.EnsureNla();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _nlaStatus.Text = "! 無法開啟：" + ex.Message;
+            _nlaStatus.ForeColor = Theme.Warning;
+            return;
+        }
+
+        switch (result)
+        {
+            case NlaResult.AlreadyOn:
+                _nlaStatus.Text = "✓ 已開啟：帳號密碼驗證通過才建立遠端桌面工作階段";
+                _nlaStatus.ForeColor = Theme.Success;
+                break;
+            case NlaResult.Enabled:
+                _nlaStatus.Text = "✓ 已自動開啟：帳號密碼驗證通過才建立遠端桌面工作階段";
+                _nlaStatus.ForeColor = Theme.Success;
+                Core.Logs.OperationLog.Write("成功", "已自動開啟這台電腦的 NLA（網路層級驗證）");
+                break;
+            default:
+                _nlaStatus.Text = "✗ 群組原則強制關閉 NLA，程式不會覆寫，請依下方說明修改";
+                _nlaStatus.ForeColor = Theme.Danger;
+                _nlaHelp.Visible = true;
+                break;
+        }
     }
 
     /// <summary>在背景讀取防火牆規則（PowerShell 需要數秒），只採用最後一次檢查的結果。</summary>

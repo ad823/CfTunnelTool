@@ -93,7 +93,7 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             else
                 log.Warn($"{m.Name}（{m.Ip}:{m.Port}）目前連不到，請確認該電腦已開機、已啟用遠端桌面、防火牆允許 {m.Port}");
         }
-        await RestrictLocalFirewallAsync(rdp);
+        await HardenLocalHostAsync(rdp);
 
         // ---- 3. 私有網路路由 ----
         log.Step("設定私有網路路由");
@@ -230,15 +230,34 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
     /// <summary>
     /// 中繼電腦本身也在開放清單時：把它的遠端桌面防火牆來源限制為內部網路，
-    /// 避免路由器轉送或 UPnP 讓網際網路繞過 Cloudflare 直接連進來。其他電腦請在該電腦上用「這台電腦要被遠端連線」設定。
+    /// 避免路由器轉送或 UPnP 讓網際網路繞過 Cloudflare 直接連進來；並強制開啟 NLA。
+    /// 其他電腦請在該電腦上用「這台電腦要被遠端連線」設定。
     /// </summary>
-    async Task RestrictLocalFirewallAsync(RdpConfig rdp)
+    async Task HardenLocalHostAsync(RdpConfig rdp)
     {
         var thisIp = RdpHost.GetLanIPv4();
         if (thisIp is null || rdp.Machines.FirstOrDefault(m => m.Ip == thisIp) is not { } self) return;
         var host = RdpHost.GetStatus();
         if (!host.Enabled) return;
 
+        await RestrictLocalFirewallAsync(self, host);
+        try
+        {
+            switch (await Task.Run(RdpHost.EnsureNla))
+            {
+                case NlaResult.AlreadyOn: log.Ok($"{self.Name}（這台電腦）的 NLA 已開啟"); break;
+                case NlaResult.Enabled: log.Ok($"{self.Name}（這台電腦）已開啟 NLA：帳號密碼驗證通過才建立遠端桌面工作階段"); break;
+                default: log.Warn($"{self.Name}（這台電腦）的群組原則強制關閉 NLA，程式不會覆寫。" + RdpHost.NlaPolicyHelp); break;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            log.Warn("無法開啟 NLA：" + ex.Message);
+        }
+    }
+
+    async Task RestrictLocalFirewallAsync(RdpMachine self, RdpHostStatus host)
+    {
         try
         {
             var open = await Task.Run(() => RdpHost.GetOpenFirewallRules(host.Port));

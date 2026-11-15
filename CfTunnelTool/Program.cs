@@ -90,6 +90,7 @@ static class Program
                     Application.Run(new HostSetupForm());
                     return 0;
                 case AppMode.Admin:
+                    if (!AdminGate.Ensure(null)) return 0;
                     break;
                 default:
                     return 0;
@@ -100,6 +101,10 @@ static class Program
             if (state.Result is null) return 0;
             config = AppStorage.LoadConfig();
             if (config is null) return 0;
+        }
+        else if (!AdminGate.Ensure(config))
+        {
+            return 0; // 管理畫面需要登入
         }
 
         Application.Run(new DashboardForm(config));
@@ -125,6 +130,8 @@ static class Program
     {
         if (AppStorage.HasConfig)
         {
+            // 已部署的電腦：解除安裝也要管理帳號密碼，避免任何人都能移除
+            if (!AdminGate.Ensure(TryLoadConfig())) return 0;
             var answer = MessageBox.Show(
                 "這台電腦還有 CfTunnelTool 的 Cloudflare 設定（Tunnel、DNS、遠端桌面）與連線服務。\n\n" +
                 "建議先開啟管理畫面按「移除全部設定」，再解除安裝。\n\n" +
