@@ -15,6 +15,8 @@ sealed class HostAccountPanel : TableLayoutPanel
     int _firewallCheck;
     readonly Label _nlaStatus;
     readonly Label _nlaHelp;
+    readonly Button _nlaToggle;
+    bool _nlaToggleOn; // 按鈕按下後要開啟（true）或關閉（false）NLA
     readonly ComboBox _account;
     readonly TextBox _pwd1, _pwd2;
     readonly CheckBox _keepAutoLogon;
@@ -46,7 +48,10 @@ sealed class HostAccountPanel : TableLayoutPanel
         _restrictFirewall.Click += async (_, _) => await RestrictFirewallAsync();
         AddFlow(Inline("防火牆來源："), _firewallStatus, _restrictFirewall);
         _nlaStatus = Inline("");
-        AddFlow(Inline("NLA（網路層級驗證）："), _nlaStatus);
+        _nlaToggle = Theme.SecondaryButton("開啟 NLA");
+        _nlaToggle.Visible = false;
+        _nlaToggle.Click += async (_, _) => await ToggleNlaAsync();
+        AddFlow(Inline("NLA（網路層級驗證）："), _nlaStatus, _nlaToggle);
         _nlaHelp = AddText(RdpHost.NlaPolicyHelp, Theme.Small, Theme.Danger);
         _nlaHelp.Visible = false;
 
@@ -171,14 +176,24 @@ sealed class HostAccountPanel : TableLayoutPanel
         if (_account.Items.Count > 0) UpdateAccountHint();
     }
 
-    /// <summary>NLA 沒開時自動開啟（群組原則強制關閉時只提示，不覆寫）。</summary>
+    /// <summary>
+    /// NLA 沒開時自動開啟（群組原則強制關閉時只提示，不覆寫）。
+    /// 只加入 Entra ID 的電腦不自動修改，顯示警告並提供手動開啟／關閉。
+    /// </summary>
     void RefreshNla(RdpHostStatus s)
     {
         _nlaHelp.Visible = false;
+        _nlaToggle.Visible = false;
         if (s.IsHomeEdition || !s.Enabled)
         {
             _nlaStatus.Text = "—";
             _nlaStatus.ForeColor = Theme.Muted;
+            return;
+        }
+
+        if (RdpHost.GetJoinState().EntraOnly)
+        {
+            RefreshEntraNla(s);
             return;
         }
 
@@ -205,11 +220,65 @@ sealed class HostAccountPanel : TableLayoutPanel
                 _nlaStatus.ForeColor = Theme.Success;
                 Core.Logs.OperationLog.Write("成功", "已自動開啟這台電腦的 NLA（網路層級驗證）");
                 break;
+            case NlaResult.SkippedEntra:
+                RefreshEntraNla(s);
+                break;
             default:
                 _nlaStatus.Text = "✗ 群組原則強制關閉 NLA，程式不會覆寫，請依下方說明修改";
                 _nlaStatus.ForeColor = Theme.Danger;
+                _nlaHelp.Text = RdpHost.NlaPolicyHelp;
+                _nlaHelp.ForeColor = Theme.Danger;
                 _nlaHelp.Visible = true;
                 break;
+        }
+    }
+
+    /// <summary>Entra ID 電腦：顯示目前狀態與說明，群組原則沒有鎖定時提供手動切換。</summary>
+    void RefreshEntraNla(RdpHostStatus s)
+    {
+        _nlaStatus.Text = s.NlaEffective
+            ? "! 已開啟：Entra ID 電腦開啟 NLA 時，瀏覽器方式無法登入（WARP 方式可以）"
+            : "! 未開啟：Entra ID 電腦不會自動開啟，未驗證帳號密碼就會建立工作階段";
+        _nlaStatus.ForeColor = Theme.Warning;
+
+        var locked = s.NlaEffective ? s.NlaPolicy == 1 : s.NlaBlockedByPolicy;
+        _nlaHelp.Text = RdpHost.EntraNlaHelp + (locked ? "\n目前由群組原則決定，無法在這裡切換；網域電腦請洽 IT。" : "");
+        _nlaHelp.ForeColor = Theme.Warning;
+        _nlaHelp.Visible = true;
+
+        _nlaToggleOn = !s.NlaEffective;
+        _nlaToggle.Text = _nlaToggleOn ? "開啟 NLA" : "關閉 NLA（讓瀏覽器方式可以登入）";
+        _nlaToggle.Visible = !locked;
+    }
+
+    async Task ToggleNlaAsync()
+    {
+        var on = _nlaToggleOn;
+        if (!on && MessageBox.Show(FindForm(),
+                "確定要關閉這台電腦的 NLA（網路層級驗證）嗎？\n\n" +
+                "關閉後，連到這台電腦的人會先建立遠端桌面工作階段、看到 Windows 登入畫面，之後才驗證帳號密碼，" +
+                "較容易被嘗試登入並消耗電腦資源。\n\n" +
+                "只有要讓 Entra ID 帳號用 Cloudflare 瀏覽器方式登入時才需要關閉；改用 WARP 方式連線的話請保持開啟。",
+                "關閉 NLA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        _nlaToggle.Enabled = false;
+        try
+        {
+            await Task.Run(() => RdpHost.SetNla(on));
+            Core.Logs.OperationLog.Write("成功", on
+                ? "已手動開啟這台電腦的 NLA（網路層級驗證，Entra ID 電腦）"
+                : "已手動關閉這台電腦的 NLA（網路層級驗證，Entra ID 電腦，讓瀏覽器方式可以登入）");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            MessageBox.Show(FindForm(), (on ? "開啟" : "關閉") + " NLA 失敗：\n\n" + ex.Message, "NLA",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _nlaToggle.Enabled = true;
+            RefreshStatus();
         }
     }
 

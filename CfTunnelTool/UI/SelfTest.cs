@@ -425,6 +425,57 @@ static class SelfTest
         var nlaNow = RdpHost.GetStatus();
         sb.AppendLine($"INFO  本機 NLA：Effective={nlaNow.NlaEffective} Local={nlaNow.NlaRequired} Policy={nlaNow.NlaPolicy?.ToString() ?? "未設定"}");
 
+        // ---- v1.10.1：Entra ID 電腦不自動開啟 NLA（只讀取，不修改本機設定） ----
+        const string dsregEntra = """
+            +----------------------------------------------------------------------+
+            | Device State                                                         |
+            +----------------------------------------------------------------------+
+
+                         AzureAdJoined : YES
+                      EnterpriseJoined : NO
+                          DomainJoined : NO
+                           Device Name : PC01
+            """;
+        const string dsregHybrid = "  AzureAdJoined : YES\r\n  EnterpriseJoined : NO\r\n  DomainJoined : YES\r\n  DomainName : CORP\r\n";
+        const string dsregNone = "  AzureAdJoined : NO\r\n  EnterpriseJoined : NO\r\n  DomainJoined : NO\r\n";
+        Check("Entra：dsregcmd 只加入 Entra ID", RdpHost.ParseDsregStatus(dsregEntra) == new JoinState(true, false) &&
+                                                 RdpHost.ParseDsregStatus(dsregEntra).EntraOnly);
+        Check("Entra：dsregcmd 混合加入不算例外", RdpHost.ParseDsregStatus(dsregHybrid) == new JoinState(true, true) &&
+                                                 !RdpHost.ParseDsregStatus(dsregHybrid).EntraOnly);
+        Check("Entra：dsregcmd 沒有加入", RdpHost.ParseDsregStatus(dsregNone) == new JoinState(false, false));
+        Check("Entra：dsregcmd 空白或不認得的輸出視為沒有加入", RdpHost.ParseDsregStatus("") == new JoinState(false, false) &&
+                                                          RdpHost.ParseDsregStatus("AzureAdJoinedX : YES") == new JoinState(false, false));
+        Check("Entra：登錄檔 JoinInfo 有子機碼、沒有 AD 網域", RdpHost.JoinStateFrom(["ABCDEF0123"], 2).EntraOnly);
+        Check("Entra：登錄檔 JoinInfo 有子機碼且加入 AD 網域是混合加入",
+            RdpHost.JoinStateFrom(["ABCDEF0123"], RdpHost.NetSetupDomainName) == new JoinState(true, true));
+        Check("Entra：登錄檔 JoinInfo 沒有子機碼", !RdpHost.JoinStateFrom([], 2).EntraJoined && !RdpHost.JoinStateFrom([""], 0).EntraJoined);
+        var entraOnly = new JoinState(true, false);
+        var notJoined = new JoinState(false, false);
+        Check("Entra：只加入 Entra ID 時不自動開啟 NLA",
+            RdpHost.PlanNla(Nla(false, 2, null, null), entraOnly) == NlaResult.SkippedEntra &&
+            RdpHost.PlanNla(Nla(true, 2, null, null), entraOnly) == NlaResult.SkippedEntra &&
+            RdpHost.PlanNla(Nla(true, 2, 0, null), entraOnly) == NlaResult.SkippedEntra);
+        Check("Entra：沒有加入或混合加入時照常強制開啟 NLA",
+            RdpHost.PlanNla(Nla(false, 2, null, null), notJoined) == NlaResult.Enabled &&
+            RdpHost.PlanNla(Nla(false, 2, null, null), new JoinState(true, true)) == NlaResult.Enabled &&
+            RdpHost.PlanNla(Nla(true, 2, null, null), notJoined) == NlaResult.AlreadyOn &&
+            RdpHost.PlanNla(Nla(true, 2, 0, null), notJoined) == NlaResult.BlockedByPolicy);
+        Check("Entra：說明文字提到瀏覽器需要關閉 NLA 與建議 WARP",
+            RdpHost.EntraNlaHelp.Contains("Entra ID") && RdpHost.EntraNlaHelp.Contains("關閉 NLA") && RdpHost.EntraNlaHelp.Contains("WARP"));
+        var joinNow = RdpHost.GetJoinState();
+        sb.AppendLine($"INFO  本機加入狀態（登錄檔）：{joinNow}");
+        var dsregExe = Path.Combine(Environment.SystemDirectory, "dsregcmd.exe");
+        var dsreg = File.Exists(dsregExe) ? Cloudflared.Run(dsregExe, "/status") : new Cloudflared.RunResult(-1, "");
+        if (dsreg.ExitCode == 0 && dsreg.Output.Contains("AzureAdJoined", StringComparison.OrdinalIgnoreCase))
+        {
+            var dsregNow = RdpHost.ParseDsregStatus(dsreg.Output);
+            Check("Entra：登錄檔判斷與 dsregcmd /status 一致", dsregNow == joinNow, $"dsregcmd={dsregNow} 登錄檔={joinNow}");
+        }
+        else
+        {
+            sb.AppendLine($"INFO  dsregcmd /status 無法執行（ExitCode={dsreg.ExitCode}），略過一致性比對");
+        }
+
         // ---- v1.8.0：管理帳號密碼（暫存路徑，不影響本機設定） ----
         var authPath = Path.Combine(Path.GetTempPath(), $"cftt-admin-{Guid.NewGuid():N}.dat");
         try

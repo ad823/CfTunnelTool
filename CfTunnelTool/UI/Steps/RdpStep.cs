@@ -140,7 +140,9 @@ sealed partial class RdpStep : StepPage
             "•  這台電腦是中繼站：部署時建議不要勾選「記住 Token」，避免電腦被入侵時連帶影響你的 Cloudflare 網域\n" +
             "•  被開放的電腦請設定固定 IP（或在路由器做 DHCP 保留），IP 改變後需要回來修改設定\n" +
             "•  Windows 帳號請使用強密碼並設定帳號鎖定原則；只把需要的人加入「Remote Desktop Users」群組\n" +
-            "•  加入 Microsoft Entra ID 的電腦，需要關閉遠端桌面的 NLA 強制要求才能用瀏覽器登入",
+            "•  加入 Microsoft Entra ID 的電腦：用瀏覽器方式登入時需要關閉 NLA，所以程式不會自動開啟 NLA。" +
+            "建議改用 WARP 方式連線並開啟 NLA；一定要用瀏覽器方式時才關閉。可以在上方「NLA」那一列" +
+            "（其他電腦在該電腦的「這台電腦要被遠端連線」畫面）手動開啟或關閉",
             Theme.WarnBack, Theme.Danger);
     }
 

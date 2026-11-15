@@ -105,6 +105,7 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   - Gateway TCP／UDP 代理與 Split Tunnel：只讓被開放的電腦 IP 走 WARP
   - Gateway 網路規則：被開放的電腦只開放遠端桌面連接埠，其他連接埠（例如 445 檔案分享）一律封鎖
   - 中繼電腦本身在開放清單中時：遠端桌面防火牆只允許內部網路、開啟 NLA
+    （只加入 Microsoft Entra ID 的中繼電腦不修改 NLA，部署記錄會顯示警告）
 
   從舊版升級：用新版重新部署每一個地點，才會套用最新的 Cloudflare 設定。
 
@@ -183,6 +184,7 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
 
   這台電腦的遠端桌面：
   - 按「啟用這台電腦的遠端桌面」，同時會限制防火牆來源並開啟 NLA
+    （只加入 Microsoft Entra ID 的電腦不修改 NLA，見下方 NLA 說明）
 
   防火牆來源：
   - 應顯示「✓ 只允許內部網路」
@@ -198,8 +200,12 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
       →「需要使用網路層級驗證對遠端連線進行使用者驗證」設為「已啟用」或「尚未設定」，
       並確認「遠端 (RDP) 連線需要使用指定的安全性層」不是「RDP」
     網域電腦請洽 IT 修改網域原則
-  - 加入 Microsoft Entra ID 的電腦：用瀏覽器方式登入需要關閉 NLA，
-    但程式會強制開啟 NLA，請改用 WARP 方式連線
+  - 加入 Microsoft Entra ID 的電腦（沒有加入 AD 網域）：用瀏覽器方式登入需要關閉 NLA，
+    所以程式不會自動開啟 NLA，NLA 那一列會顯示黃色警告與切換按鈕：
+      建議改用 WARP 方式連線，並按「開啟 NLA」
+      一定要讓 Entra ID 帳號用瀏覽器方式登入時，才按「關閉 NLA」（會再確認一次）
+    NLA 由群組原則決定時不會顯示按鈕，請洽 IT
+    同時加入 AD 網域的「混合加入」電腦照常自動開啟 NLA
 
   遠端登入密碼：
   - 空白密碼的 Windows 帳號不能遠端登入
@@ -340,6 +346,7 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   [ ] （遠端桌面）用不在允許清單的 Email 登入，會被擋下
   [ ] （遠端桌面）允許的使用者第一次登入時會要求註冊 2FA，之後依設定要求 2FA
   [ ] （遠端桌面）被連線的電腦顯示防火牆「只允許內部網路」、NLA「已開啟」
+      （Entra ID 電腦依使用的連線方式手動選擇，見第六章）
   [ ] （遠端桌面）可以看到 Windows 桌面，剪貼簿與檔案上傳／下載符合設定
   [ ] 測試完畢後按「移除全部設定…」，確認 Cloudflare 後台的 Tunnel、DNS 紀錄、
       Access 應用程式與政策、目標（Targets）、路由（Routes）都已刪除
