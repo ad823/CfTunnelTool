@@ -121,6 +121,8 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 有完整步驟和第一
 
 - **不會覆寫你現有的 DNS**：網址已有 A/AAAA 紀錄時會停下來提醒，指向其他 Tunnel 的紀錄會先詢問
 - **不會誤用別台電腦的 Tunnel**：同名 Tunnel 已存在時會先詢問；移除時只刪除這台電腦建立的 Tunnel 與 DNS
+- **管理畫面需要帳號密碼**（1.8.0 起）：第一次進入管理畫面時設定，之後每次開啟都要登入；連續失敗 5 次鎖定 5 分鐘，閒置 15 分鐘自動鎖定。密碼以 PBKDF2-SHA256 加鹽雜湊存在 `C:\ProgramData\CfTunnelTool\admin.dat`（只有 Administrators 與 SYSTEM 能讀取）。忘記密碼時按「忘記密碼…」，輸入此地點的 Cloudflare API Token 驗證後重設；已部署的電腦刪除 `admin.dat` 也一樣要通過 Cloudflare 驗證。從舊版升級的電腦，第一次開啟會要求驗證並設定帳號密碼。只保護管理畫面，「使用者端」與「這台電腦要被遠端連線」不需要登入；能執行本程式的人本來就是 Windows 系統管理員，真正的界線仍是 Windows 帳號
+- **強制開啟 NLA**（1.8.0 起）：啟用遠端桌面、開啟「這台電腦要被遠端連線」畫面，以及中繼電腦部署時，會自動開啟網路層級驗證（帳號密碼驗證通過才建立工作階段），並檢查群組原則；群組原則強制關閉時不會覆寫，畫面會顯示修改方式
 - **API Token 以 Windows DPAPI 加密**存在 `C:\ProgramData\CfTunnelTool\token.dat`，只有同一個 Windows 使用者能解開（也可以選擇不記住）
 - 服務使用的是 Cloudflare 產生的 Tunnel Token，只能連這一條 Tunnel，權限比 API Token 小
 - **遠端桌面不對外開任何連接埠**：沒通過 Access 的 Email 驗證與 2FA，連 RDP 登入畫面都看不到
@@ -135,6 +137,7 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 有完整步驟和第一
 |---|---|
 | `C:\ProgramData\CfTunnelTool\config.json` | 網域、Tunnel、網址設定（不含密鑰） |
 | `C:\ProgramData\CfTunnelTool\token.dat` | 加密後的 API Token |
+| `C:\ProgramData\CfTunnelTool\admin.dat` | 管理帳號與密碼雜湊（不含明文） |
 | `C:\Program Files\CfTunnelTool\CfTunnelTool.exe` | 管理程式 |
 | `C:\Program Files\cloudflared\cloudflared.exe` | Cloudflare 官方連線程式（從官方 GitHub 下載） |
 | Windows 服務 `Cloudflared` | 開機自動執行的連線服務 |

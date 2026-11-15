@@ -414,6 +414,48 @@ static class SelfTest
         sb.AppendLine("INFO  GetOpenFirewallRules = " + (fwOpen is null ? "null" : string.Join(" | ", fwOpen.Select(r => $"{r.Name}={r.DisplayName}"))));
         Check("防火牆：讀得到本機規則", fwOpen is not null);
 
+        // ---- v1.8.0：NLA 強制開啟與群組原則（只讀取，不修改本機設定） ----
+        RdpHostStatus Nla(bool local, int layer, int? nlaPolicy, int? layerPolicy) =>
+            new(true, local, layer, 3389, "Professional", nlaPolicy, layerPolicy);
+        Check("NLA：沒有群組原則時依本機設定", Nla(true, 2, null, null).NlaEffective && !Nla(false, 2, null, null).NlaEffective);
+        Check("NLA：群組原則強制開啟優先於本機設定", Nla(false, 2, 1, null).NlaEffective && !Nla(false, 2, 1, null).NlaBlockedByPolicy);
+        Check("NLA：群組原則強制關閉會被偵測", !Nla(true, 2, 0, null).NlaEffective && Nla(true, 2, 0, null).NlaBlockedByPolicy);
+        Check("NLA：舊 RDP 安全性層無法使用 NLA", !Nla(true, 0, null, null).NlaEffective && !Nla(true, 0, null, null).NlaBlockedByPolicy);
+        Check("NLA：群組原則強制舊 RDP 安全性層視為封鎖", Nla(true, 2, null, 0).NlaBlockedByPolicy);
+        var nlaNow = RdpHost.GetStatus();
+        sb.AppendLine($"INFO  本機 NLA：Effective={nlaNow.NlaEffective} Local={nlaNow.NlaRequired} Policy={nlaNow.NlaPolicy?.ToString() ?? "未設定"}");
+
+        // ---- v1.8.0：管理帳號密碼（暫存路徑，不影響本機設定） ----
+        var authPath = Path.Combine(Path.GetTempPath(), $"cftt-admin-{Guid.NewGuid():N}.dat");
+        try
+        {
+            var auth = new AdminAuth(authPath);
+            Check("管理密碼：尚未設定時 Exists 為 false", !auth.Exists);
+            Check("管理密碼：規則 — 太短", AdminAuth.ValidateNew("admin", "short1", "short1") is not null);
+            Check("管理密碼：規則 — 兩次不同", AdminAuth.ValidateNew("admin", "LongPassword1", "LongPassword2") is not null);
+            Check("管理密碼：規則 — 不能和帳號相同", AdminAuth.ValidateNew("administrator1", "Administrator1", "Administrator1") is not null);
+            Check("管理密碼：規則 — 合格", AdminAuth.ValidateNew("admin", "LongPassword1", "LongPassword1") is null);
+            auth.Create("admin", "LongPassword1");
+            var raw = File.ReadAllText(authPath);
+            Check("管理密碼：檔案不含明文密碼", auth.Exists && !raw.Contains("LongPassword1") && auth.StoredHash is { Length: > 20 });
+            Check("管理密碼：正確密碼可登入（帳號不分大小寫）", auth.Verify("ADMIN", "LongPassword1").Ok);
+            Check("管理密碼：帳號錯誤不能登入", !auth.Verify("other", "LongPassword1").Ok);
+            var t0 = DateTime.Now;
+            AdminLoginResult last = new(false, 0, TimeSpan.Zero);
+            for (var i = 0; i < AdminAuth.MaxFailures - 1; i++) last = auth.Verify("admin", "wrong", t0); // 加上前一次共 5 次
+            Check("管理密碼：連續失敗 5 次鎖定", last.Locked, $"remaining={last.Remaining}");
+            Check("管理密碼：鎖定期間正確密碼也不能登入", auth.Verify("admin", "LongPassword1", t0.AddMinutes(1)).Locked);
+            Check("管理密碼：鎖定期滿後可以登入", auth.Verify("admin", "LongPassword1", t0.AddMinutes(6)).Ok);
+            var again = auth.Verify("admin", "wrong", t0.AddMinutes(7));
+            Check("管理密碼：成功登入後失敗次數重新計算", !again.Ok && again.Remaining == AdminAuth.MaxFailures - 1, $"remaining={again.Remaining}");
+            File.WriteAllText(authPath, "{broken");
+            Check("管理密碼：檔案損毀視為未設定", !auth.Exists);
+        }
+        finally
+        {
+            try { File.Delete(authPath); } catch (IOException) { }
+        }
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

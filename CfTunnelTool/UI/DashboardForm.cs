@@ -129,6 +129,12 @@ sealed class DashboardForm : Form
             logs.ShowDialog(this);
             return Task.CompletedTask;
         });
+        Action(Theme.SecondaryButton("變更管理密碼…"), () =>
+        {
+            using var change = new AdminLoginForm(AdminLoginMode.ChangePassword, _config);
+            change.ShowDialog(this);
+            return Task.CompletedTask;
+        });
         Action(Theme.SecondaryButton("Cloudflare 後台 ↗"), () => { Theme.OpenUrl("https://one.dash.cloudflare.com/"); return Task.CompletedTask; });
         Action(Theme.DangerButton("移除全部設定…"), RemoveAsync);
         AddRow(buttons);
