@@ -230,7 +230,7 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
 
     /// <summary>
     /// 中繼電腦本身也在開放清單時：把它的遠端桌面防火牆來源限制為內部網路，
-    /// 避免路由器轉送或 UPnP 讓網際網路繞過 Cloudflare 直接連進來；並強制開啟 NLA。
+    /// 避免路由器轉送或 UPnP 讓網際網路繞過 Cloudflare 直接連進來；並強制開啟 NLA（只加入 Entra ID 的電腦只寫警告、不修改）。
     /// 其他電腦請在該電腦上用「這台電腦要被遠端連線」設定。
     /// </summary>
     async Task HardenLocalHostAsync(RdpConfig rdp)
@@ -247,6 +247,10 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             {
                 case NlaResult.AlreadyOn: log.Ok($"{self.Name}（這台電腦）的 NLA 已開啟"); break;
                 case NlaResult.Enabled: log.Ok($"{self.Name}（這台電腦）已開啟 NLA：帳號密碼驗證通過才建立遠端桌面工作階段"); break;
+                case NlaResult.SkippedEntra:
+                    log.Warn($"{self.Name}（這台電腦）的 NLA 目前{(host.NlaEffective ? "已開啟" : "未開啟")}，程式沒有修改。" +
+                             RdpHost.EntraNlaHelp + "可以在「這台電腦要被遠端連線」畫面的 NLA 那一列手動開啟或關閉。");
+                    break;
                 default: log.Warn($"{self.Name}（這台電腦）的群組原則強制關閉 NLA，程式不會覆寫。" + RdpHost.NlaPolicyHelp); break;
             }
         }
