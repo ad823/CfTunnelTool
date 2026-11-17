@@ -169,6 +169,6 @@ sealed class ClientConfig
     public static ClientConfig? Load(string path)
     {
         try { return File.Exists(path) ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(path), Json) : null; }
-        catch (Exception ex) when (ex is JsonException or IOException) { return null; }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return null; }
     }
 }

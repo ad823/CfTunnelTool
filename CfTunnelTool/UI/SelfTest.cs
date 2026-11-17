@@ -456,6 +456,38 @@ static class SelfTest
             try { File.Delete(authPath); } catch (IOException) { }
         }
 
+        // ---- v1.9.0：桌面捷徑經過程式（--connect），連線前先檢查驗證 ----
+        var pc = ConnectArgs.Parse(["--connect", "office pc"]);
+        Check("捷徑參數：解析名稱（含空白）", pc is { Name: "office pc", VnetId: null }, pc?.ToString() ?? "null");
+        var pcSite = ConnectArgs.Parse(["--connect", "office-pc", "--site", "a1b2"]);
+        Check("捷徑參數：解析地點", pcSite is { Name: "office-pc", VnetId: "a1b2" }, pcSite?.ToString() ?? "null");
+        Check("捷徑參數：缺少名稱時不解析",
+            ConnectArgs.Parse(["--connect"]) is null && ConnectArgs.Parse(["--connect", "--site", "x"]) is null &&
+            ConnectArgs.Parse(["--connect", "  "]) is null);
+        Check("捷徑參數：沒有 --connect 時不進入捷徑模式", ConnectArgs.Parse([]) is null && ConnectArgs.Parse(["--uninstall"]) is null);
+        var siteMachine = new ClientMachine { Name = "office-pc", Ip = "192.168.10.20", VnetId = "v2", VnetName = "factory/b" };
+        var plainMachine = new ClientMachine { Name = "office-pc", Ip = "192.168.10.20" };
+        Check("捷徑參數：建立的參數含名稱與地點",
+            ConnectArgs.Build(siteMachine) == "--connect \"office-pc\" --site v2" &&
+            ConnectArgs.Build(plainMachine) == "--connect \"office-pc\"", ConnectArgs.Build(siteMachine));
+        Check("捷徑參數：名稱裡的雙引號會被移除",
+            ConnectArgs.Build(new ClientMachine { Name = "a\"b" }) == "--connect \"ab\"");
+        var bothSites = new[] { plainMachine, siteMachine };
+        Check("捷徑參數：依地點找到同名的電腦",
+            ConnectArgs.Find(bothSites, new ConnectRequest("OFFICE-PC", "v2")) == siteMachine &&
+            ConnectArgs.Find(bothSites, new ConnectRequest("office-pc", null)) == plainMachine &&
+            ConnectArgs.Find(bothSites, new ConnectRequest("other", null)) is null);
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        Check("捷徑：桌面捷徑是 .lnk，含地點且替換非法字元",
+            WarpClient.ShortcutPath(siteMachine) == Path.Combine(desktop, "遠端桌面 - office-pc（factory_b）.lnk"),
+            WarpClient.ShortcutPath(siteMachine));
+        Check("捷徑：舊版 .rdp 捷徑路徑（遷移用）",
+            WarpClient.LegacyShortcutPath(plainMachine) == Path.Combine(desktop, "遠端桌面 - office-pc.rdp"));
+        Check("捷徑：連線用的 .rdp 檔放在暫存資料夾，不在桌面",
+            WarpClient.RdpFilePath(plainMachine).StartsWith(WarpClient.RdpTempDir, StringComparison.OrdinalIgnoreCase) &&
+            !WarpClient.RdpFilePath(plainMachine).StartsWith(desktop, StringComparison.OrdinalIgnoreCase));
+        Check("等候驗證：最多等 3 分鐘", AuthWaitForm.WaitLimit == TimeSpan.FromMinutes(3));
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

@@ -41,7 +41,7 @@ static class SelfInstaller
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>給捷徑使用的執行檔：已安裝就用安裝位置，否則用目前的執行檔。</summary>
-    static string ShortcutTarget => File.Exists(InstalledExe) ? InstalledExe : Environment.ProcessPath!;
+    public static string ShortcutTarget => File.Exists(InstalledExe) ? InstalledExe : Environment.ProcessPath!;
 
     public static void Install(ILog log)
     {
@@ -119,7 +119,9 @@ static class SelfInstaller
 
     public static bool HasReturnConsoleShortcut => File.Exists(ReturnConsoleShortcut);
 
-    static void CreateShortcut(string lnkPath, string target, string arguments, string description)
+    /// <param name="iconLocation">圖示，例如 C:\Windows\System32\mstsc.exe,0；null 時用目標程式的圖示。</param>
+    internal static void CreateShortcut(string lnkPath, string target, string arguments, string description,
+                                        string? iconLocation = null)
     {
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
                         ?? throw new InvalidOperationException("無法建立捷徑（找不到 WScript.Shell）。");
@@ -134,6 +136,8 @@ static class SelfInstaller
                 t.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, [arguments]);
                 t.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, [Path.GetDirectoryName(target)!]);
                 t.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, [description]);
+                if (iconLocation is not null)
+                    t.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk, [iconLocation]);
                 t.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
             }
             finally { Marshal.FinalReleaseComObject(lnk); }

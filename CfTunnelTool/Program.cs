@@ -25,7 +25,12 @@ static class Program
         }
 #endif
 
-        // 正式版的 manifest 已要求系統管理員權限；這裡是保險（例如開發模式執行）
+        // 桌面的遠端桌面捷徑：一般權限就能執行（不跳 UAC），先檢查驗證、需要時自動開驗證頁，再開遠端桌面
+        if (ConnectArgs.Parse(args) is { } connect)
+            return QuickConnectForm.Run(connect);
+
+        // 其他功能（安裝服務、部署、管理、啟用遠端桌面）都需要系統管理員：
+        // manifest 是 asInvoker（讓上面的捷徑免 UAC），所以在這裡提權重新執行
         if (!Cloudflared.IsAdministrator())
             return RelaunchAsAdministrator(args);
 

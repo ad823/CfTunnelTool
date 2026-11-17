@@ -194,10 +194,30 @@ static class WarpClient
     }
 
     /// <summary>
-    /// 引導重新驗證 2FA：開啟 WARP 視窗（個人資料 → 帳戶資訊 → 重新驗證），
-    /// 並開啟官方的 refresh-identity 網址重新登入組織。
+    /// 請 WARP 重新做 Cloudflare Access 驗證（warp-cli debug access-reauth），
+    /// 等同 WARP 視窗的「個人資料 → 帳戶資訊 → 重新驗證」，WARP 會開啟瀏覽器的驗證頁。
+    /// 舊版 WARP 沒有這個指令時回傳 false。會阻塞，請在背景執行緒呼叫。
     /// </summary>
-    public static void OpenReauthenticate(string team)
+    public static bool RequestAccessReauth()
+    {
+        if (!IsInstalled) return false;
+        try { return Cloudflared.Run(CliPath, "--accept-tos", "debug", "access-reauth").ExitCode == 0; }
+        catch (System.ComponentModel.Win32Exception) { return false; }
+    }
+
+    /// <summary>
+    /// 開啟重新驗證：優先用 WARP 的 access-reauth；不支援時改開 WARP 視窗與官方 refresh-identity 網址。
+    /// 回傳是否由 WARP 直接開啟驗證頁。會阻塞，請在背景執行緒呼叫。
+    /// </summary>
+    public static bool OpenReauthenticate(string team)
+    {
+        if (RequestAccessReauth()) return true;
+        OpenRefreshIdentity(team);
+        return false;
+    }
+
+    /// <summary>舊方法：開啟 WARP 視窗與 refresh-identity 網址，由使用者在 WARP 視窗按「重新驗證」。</summary>
+    static void OpenRefreshIdentity(string team)
     {
         OpenGui();
         if (!string.IsNullOrEmpty(team))
@@ -241,35 +261,64 @@ static class WarpClient
         return string.Join("\r\n", lines);
     }
 
-    public static void DeleteRdpShortcut(ClientMachine m)
-    {
-        var path = RdpFilePath(m);
-        if (File.Exists(path)) File.Delete(path);
-    }
+    // 桌面捷徑是 .lnk，執行 CfTunnelTool.exe --connect：先檢查驗證、需要時自動開驗證頁，再開遠端桌面。
+    // 舊版的桌面捷徑是 .rdp 檔（直接開 mstsc，會繞過檢查），開啟使用者畫面時自動換成 .lnk。
 
     static string DesktopDir => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
 
-    public static string RdpFilePath(ClientMachine m)
+    /// <summary>連線時暫存的 .rdp 檔資料夾（不放在桌面）。</summary>
+    public static string RdpTempDir => Path.Combine(Path.GetTempPath(), "CfTunnelTool", "rdp");
+
+    /// <summary>檔名用的名稱：有地點（獨立虛擬網路）時加在後面，避免不同地點的同名電腦互相覆蓋。</summary>
+    public static string FileLabel(ClientMachine m)
     {
-        // 有地點（獨立虛擬網路）時加在檔名後面，避免不同地點的同名電腦互相覆蓋
         var label = m.VnetName is { Length: > 0 } site ? $"{m.Name}（{site}）" : m.Name;
-        var safe = string.Concat(label.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        return Path.Combine(DesktopDir, $"遠端桌面 - {safe}.rdp");
+        return string.Concat(label.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+    }
+
+    /// <summary>桌面捷徑：遠端桌面 - 名稱（地點）.lnk</summary>
+    public static string ShortcutPath(ClientMachine m) => Path.Combine(DesktopDir, $"遠端桌面 - {FileLabel(m)}.lnk");
+
+    /// <summary>舊版的桌面 .rdp 捷徑。</summary>
+    public static string LegacyShortcutPath(ClientMachine m) => Path.Combine(DesktopDir, $"遠端桌面 - {FileLabel(m)}.rdp");
+
+    /// <summary>連線時使用的 .rdp 檔（暫存資料夾）。</summary>
+    public static string RdpFilePath(ClientMachine m) => Path.Combine(RdpTempDir, $"遠端桌面 - {FileLabel(m)}.rdp");
+
+    public static bool HasShortcut(ClientMachine m) => File.Exists(ShortcutPath(m)) || File.Exists(LegacyShortcutPath(m));
+
+    public static void DeleteRdpShortcut(ClientMachine m)
+    {
+        foreach (var path in new[] { ShortcutPath(m), LegacyShortcutPath(m) })
+            if (File.Exists(path)) File.Delete(path);
     }
 
     public static void CreateRdpShortcuts(IEnumerable<ClientMachine> machines, ILog log)
     {
+        var mstsc = Path.Combine(Environment.SystemDirectory, "mstsc.exe");
         foreach (var m in machines)
         {
-            var path = RdpFilePath(m);
-            File.WriteAllText(path, RdpFileContent(m), new UTF8Encoding(false));
+            var legacy = LegacyShortcutPath(m);
+            if (File.Exists(legacy)) File.Delete(legacy);
+            var path = ShortcutPath(m);
+            SelfInstaller.CreateShortcut(path, SelfInstaller.ShortcutTarget, ConnectArgs.Build(m),
+                $"連到 {m.Name}（{m.Ip}）：先確認 2FA 驗證，再開啟遠端桌面", mstsc + ",0");
             log.Ok($"已在桌面建立「{Path.GetFileName(path)}」");
         }
+    }
+
+    /// <summary>把舊版的桌面 .rdp 捷徑換成新的 .lnk 捷徑，回傳換了幾個。</summary>
+    public static int MigrateLegacyShortcuts(IEnumerable<ClientMachine> machines, ILog log)
+    {
+        var legacy = machines.Where(m => File.Exists(LegacyShortcutPath(m))).ToList();
+        if (legacy.Count > 0) CreateRdpShortcuts(legacy, log);
+        return legacy.Count;
     }
 
     public static void OpenRdp(ClientMachine m)
     {
         // 每次都重寫，讓修改過的帳號或連接埠立即生效
+        Directory.CreateDirectory(RdpTempDir);
         var path = RdpFilePath(m);
         File.WriteAllText(path, RdpFileContent(m), new UTF8Encoding(false));
         Process.Start(new ProcessStartInfo("mstsc.exe", $"\"{path}\"") { UseShellExecute = true });
