@@ -111,6 +111,13 @@ static class ScreenshotRunner
         Capture(client, Path.Combine(dir, "client.png"));
         client.Close();
 
+        var wait = new AuthWaitForm(demoClient.Machines[0], "yourteam", null, demo: true)
+            { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30) };
+        wait.Show();
+        Pump(800);
+        Capture(wait, Path.Combine(dir, "auth-wait.png"));
+        wait.Close();
+
         var host = new HostSetupForm { StartPosition = FormStartPosition.Manual, Location = new Point(30, 30), TopMost = true };
         host.Show();
         Pump(3000);

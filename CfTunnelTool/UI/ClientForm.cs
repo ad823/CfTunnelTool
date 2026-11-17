@@ -164,7 +164,7 @@ sealed class ClientForm : Form
 
         AddRow(new Label
         {
-            Text = "•  連線時如果右下角跳出「Authentication required」通知，點它完成 2FA；程式也會自動提示重新驗證\n" +
+            Text = "•  按「連線」或桌面捷徑時，程式會先檢查；需要重新驗證時會自動開啟驗證網頁，完成後自動開啟遠端桌面\n" +
                    "•  2FA 到期後，已經連上的遠端桌面不會中斷，只有新的連線需要重新驗證\n" +
                    "•  遠端桌面要求帳密時，輸入公司那台電腦的 Windows 帳號密碼；「預設帳號」只預先填好帳號名稱\n" +
                    "•  不需要連公司時可以按「中斷連線」，平常上網就不會經過公司的 Cloudflare\n" +
@@ -188,6 +188,7 @@ sealed class ClientForm : Form
         Shown += async (_, _) =>
         {
             ResizeColumns();
+            MigrateShortcuts();
             await RefreshStatusAsync();
             if (!_demo) _timer.Start();
         };
@@ -265,7 +266,7 @@ sealed class ClientForm : Form
         if (SelectedMachine() is not { } m || _config is null) return;
         using var dlg = new MachineEditForm(m, _config.Sites());
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        var hadShortcut = File.Exists(WarpClient.RdpFilePath(m));
+        var hadShortcut = WarpClient.HasShortcut(m);
         if (hadShortcut) WarpClient.DeleteRdpShortcut(m);
         var i = _config.Machines.IndexOf(m);
         _config.Machines[i] = dlg.Result;
@@ -291,7 +292,28 @@ sealed class ClientForm : Form
     void CreateShortcuts()
     {
         if (_config is null || _config.Machines.Count == 0) return;
-        WarpClient.CreateRdpShortcuts(_config.Machines, _log);
+        try { WarpClient.CreateRdpShortcuts(_config.Machines, _log); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or System.Runtime.InteropServices.COMException)
+        {
+            _log.Error("建立桌面捷徑失敗：" + ex.Message);
+        }
+    }
+
+    /// <summary>舊版的桌面捷徑（.rdp，會繞過驗證檢查）換成新捷徑。</summary>
+    void MigrateShortcuts()
+    {
+        if (_demo || _config is null) return;
+        try
+        {
+            if (WarpClient.MigrateLegacyShortcuts(_config.Machines, _log) > 0)
+                _log.Info("桌面捷徑已更新：連線前會先檢查驗證，需要時自動開啟驗證頁。");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or System.Runtime.InteropServices.COMException)
+        {
+            _log.Warn("更新桌面捷徑失敗，請按「建立桌面捷徑」：" + ex.Message);
+        }
     }
 
     // ================= 狀態 =================
@@ -382,41 +404,24 @@ sealed class ClientForm : Form
         }
     }
 
-    Task ReauthenticateAsync()
+    async Task ReauthenticateAsync()
     {
-        if (_config is null) return Task.CompletedTask;
-        WarpClient.OpenReauthenticate(_config.Team);
-        _log.Info("已開啟重新驗證：請在瀏覽器完成 Email 驗證碼與 2FA。");
-        _log.Info("如果沒有出現，請在 WARP 視窗點「個人資料 → 帳戶資訊 → 重新驗證」。");
-        return Task.CompletedTask;
+        if (_config is null) return;
+        var viaWarp = await Task.Run(() => WarpClient.OpenReauthenticate(_config.Team));
+        if (viaWarp)
+        {
+            _log.Info("已請 WARP 開啟驗證頁：請在瀏覽器完成 Email 驗證碼與 2FA。");
+        }
+        else
+        {
+            _log.Info("已開啟重新驗證：請在瀏覽器完成 Email 驗證碼與 2FA。");
+            _log.Info("如果沒有出現，請在 WARP 視窗點「個人資料 → 帳戶資訊 → 重新驗證」。");
+        }
     }
 
     // ================= 連線 =================
 
-    /// <summary>確保 WARP 已連線（最多等 15 秒）。</summary>
-    async Task<bool> EnsureWarpConnectedAsync()
-    {
-        if (WarpClient.IsConnected(await Task.Run(WarpClient.GetStatus))) return true;
-        _log.Step("連上 WARP");
-        await Task.Run(WarpClient.Connect);
-        for (int i = 0; i < 5; i++)
-        {
-            await Task.Delay(3000);
-            if (WarpClient.IsConnected(await Task.Run(WarpClient.GetStatus))) return true;
-        }
-        return false;
-    }
-
-    void MarkConnected(ClientMachine m)
-    {
-        var now = DateTime.Now;
-        if (_config is not null) _config.LastVerifiedAt = now; // 連得上代表 2FA 目前有效
-        m.LastConnectedAt = now;
-        Save();
-        RenderList();
-        SetItemStatus(m, "✓ 可以連線", Theme.Success);
-        RefreshMfaStatus();
-    }
+    RdpConnectFlow Flow() => new(_config!, _log, this, Save) { Status = SetItemStatus };
 
     async Task ConnectSelectedAsync()
     {
@@ -425,85 +430,22 @@ sealed class ClientForm : Form
         SetBusy(true);
         try
         {
-            if (!await EnsureWarpConnectedAsync())
+            if (await Flow().ConnectAsync(m))
             {
-                _log.Error("WARP 無法連線，請按「開啟 WARP」確認是否已登入組織。");
-                return;
+                RenderList();
+                SetItemStatus(m, "✓ 已開啟遠端桌面", Theme.Success);
+                RefreshMfaStatus();
             }
-
-            _log.Step($"連線到 {m.Name}（{m.Ip}:{m.Port}）");
-            if (!await EnsureSiteAsync(m)) return;
-
-            SetItemStatus(m, "測試中…", Theme.Muted);
-            if (await RdpHost.TestTcpAsync(m.Ip, m.Port))
-            {
-                MarkConnected(m);
-                _log.Ok("可以連線，開啟遠端桌面");
-                WarpClient.OpenRdp(m);
-                return;
-            }
-
-            SetItemStatus(m, "✗ 連不到", Theme.Danger);
-            var mfa = CurrentMfa();
-            var likelyMfa = mfa.State is not TwoFactorState.Valid;
-            var question = likelyMfa
-                ? $"連不到 {m.Name}，最可能是 2FA 需要重新驗證。\n\n要現在重新驗證嗎？完成後程式會自動再試一次。"
-                : $"連不到 {m.Name}。可能是那台電腦沒開機、IP 改變，或 2FA 需要重新驗證。\n\n要重新驗證試試看嗎？完成後程式會自動再試一次。";
-            if (MessageBox.Show(this, question, "無法連線", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            {
-                _log.Warn($"{m.Name} 連不到。請確認那台電腦已開機，或聯絡管理者確認 IP。");
-                return;
-            }
-
-            await ReauthenticateAsync();
-            _log.Info("等候驗證完成（最多 90 秒）…");
-            for (int i = 0; i < 30; i++)
-            {
-                await Task.Delay(3000);
-                if (await RdpHost.TestTcpAsync(m.Ip, m.Port, 2500))
-                {
-                    MarkConnected(m);
-                    _log.Ok("驗證完成，開啟遠端桌面");
-                    WarpClient.OpenRdp(m);
-                    return;
-                }
-            }
-            _log.Error($"仍然連不到 {m.Name}。請確認那台電腦已開機，或把記錄截圖給管理者。");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            _log.Error("無法開啟遠端桌面：" + ex.Message);
         }
         finally
         {
             _busy = false;
             SetBusy(false);
         }
-    }
-
-    /// <summary>
-    /// 確保 WARP 在這台電腦所在的虛擬網路（地點）。無法自動切換時，引導使用者到 WARP 設定手動選擇。
-    /// </summary>
-    async Task<bool> EnsureSiteAsync(ClientMachine m)
-    {
-        if (_config is null || m.VnetId is null || _config.CurrentVnetId == m.VnetId) return true;
-
-        var siteName = m.VnetName is null ? "預設" : $"cft-{m.VnetName}";
-        _log.Step($"切換到地點「{m.VnetName ?? "預設"}」");
-        if (await Task.Run(() => WarpClient.SwitchVirtualNetwork(m.VnetId, _log)))
-        {
-            _config.CurrentVnetId = m.VnetId;
-            Save();
-            await Task.Delay(3000); // 切換後 WARP 會重新連線
-            await EnsureWarpConnectedAsync();
-            return true;
-        }
-
-        var answer = MessageBox.Show(this,
-            $"無法自動切換到「{m.Name}」所在的地點。\n\n" +
-            $"請開啟 WARP 視窗 → 設定 → 虛擬網路（Virtual networks），選擇「{siteName}」，再按「確定」繼續連線。",
-            "切換地點", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
-        WarpClient.OpenGui();
-        if (answer != DialogResult.OK) return false;
-        _config.CurrentVnetId = m.VnetId;
-        Save();
-        return true;
     }
 
     async Task TestAllAsync()
@@ -513,7 +455,7 @@ sealed class ClientForm : Form
         SetBusy(true);
         try
         {
-            if (!await EnsureWarpConnectedAsync())
+            if (!await Flow().EnsureWarpConnectedAsync())
             {
                 _log.Error("WARP 無法連線，無法測試。");
                 return;
@@ -536,7 +478,7 @@ sealed class ClientForm : Form
             }
             else if (results.Length > 0)
             {
-                _log.Warn("全部連不到：最可能是 2FA 需要重新驗證，請按「立即重新驗證」。");
+                _log.Warn("全部連不到：最可能是 2FA 需要重新驗證。直接按「連線」，程式會自動開啟驗證頁；也可以按「立即重新驗證」。");
             }
         }
         finally
@@ -621,15 +563,16 @@ sealed class ClientForm : Form
                 await WarpClient.SetOrganizationAsync(_config.Team, _log);
             }
 
-            _log.Step("建立遠端桌面捷徑");
-            WarpClient.CreateRdpShortcuts(_config.Machines, _log);
-
+            // 先安裝本程式：遠端桌面捷徑會指向安裝位置的 CfTunnelTool.exe --connect
             try { SelfInstaller.Install(_log); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
                                            or System.Runtime.InteropServices.COMException)
             {
                 _log.Warn("建立 CfTunnelTool 捷徑失敗（不影響連線）：" + ex.Message);
             }
+
+            _log.Step("建立遠端桌面捷徑");
+            CreateShortcuts();
 
             _code.Clear();
             _importPanel.Visible = false;

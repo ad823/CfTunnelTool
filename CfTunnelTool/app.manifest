@@ -4,8 +4,9 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- 需要安裝 Windows 服務，所以一律以系統管理員身分執行 -->
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <!-- 以一般權限啟動：桌面的遠端桌面捷徑（--connect）不需要系統管理員，不跳 UAC；
+             其他功能需要安裝服務等，由 Program.Main 自動以系統管理員身分重新執行（會跳 UAC） -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
