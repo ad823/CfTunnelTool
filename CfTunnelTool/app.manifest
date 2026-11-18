@@ -4,8 +4,10 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- 以一般權限啟動：桌面的遠端桌面捷徑（--connect）不需要系統管理員，不跳 UAC；
-             其他功能需要安裝服務等，由 Program.Main 自動以系統管理員身分重新執行（會跳 UAC） -->
+        <!-- 以一般權限啟動：桌面的遠端桌面捷徑（connect 參數）不需要系統管理員，不跳 UAC；
+             其他功能需要安裝服務等，由 Program.Main 自動以系統管理員身分重新執行（會跳 UAC）。
+             注意：XML 註解裡不能出現兩個連續的減號，否則 manifest 無效，Windows 會拒絕啟動
+             （「應用程式的並列設定不正確」）。 -->
         <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>

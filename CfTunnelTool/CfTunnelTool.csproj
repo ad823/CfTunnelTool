@@ -10,7 +10,7 @@
     <RootNamespace>CfTunnelTool</RootNamespace>
     <Product>CfTunnelTool</Product>
     <AssemblyTitle>CfTunnelTool</AssemblyTitle>
-    <Version>1.10.1</Version>
+    <Version>1.10.2</Version>
 
     <!-- 發行商資訊：顯示在檔案內容、工作管理員與「設定 → 應用程式」 -->
     <Company>鴻森智能科技 HONGSEN Intelligent Technology Co.,Ltd.</Company>
@@ -38,5 +38,13 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.0" />
   </ItemGroup>
+
+  <!-- manifest 不是合法 XML 時（例如註解裡出現兩個連續減號），Windows 會拒絕啟動程式；建置時先檢查 -->
+  <Target Name="ValidateAppManifest" BeforeTargets="BeforeBuild">
+    <XmlPeek XmlInputPath="$(MSBuildProjectDirectory)\app.manifest" Query="/*/@manifestVersion">
+      <Output TaskParameter="Result" ItemName="_ManifestVersion" />
+    </XmlPeek>
+    <Error Condition="'@(_ManifestVersion)' == ''" Text="app.manifest 缺少 manifestVersion，請檢查格式。" />
+  </Target>
 
 </Project>
