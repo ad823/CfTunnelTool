@@ -245,6 +245,13 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
 
         var tasks = routes.Select(async r =>
         {
+            if (r.IsTcp)
+            {
+                var uri = new Uri(r.Service);
+                return await RdpHost.TestTcpAsync(uri.Host, uri.Port)
+                    ? new LocalCheck(r, true, $"{r.Service} 可以連線")
+                    : new LocalCheck(r, false, $"{r.Service} 沒有回應");
+            }
             try
             {
                 using var resp = await http.GetAsync(r.Service, HttpCompletionOption.ResponseHeadersRead);

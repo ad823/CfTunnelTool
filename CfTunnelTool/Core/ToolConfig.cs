@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace CfTunnelTool.Core;
@@ -8,13 +9,32 @@ sealed class RouteConfig
     /// <summary>對外網址，例如 api.example.com</summary>
     public string Hostname { get; set; } = "";
 
-    /// <summary>本機服務，例如 http://localhost:5000</summary>
+    /// <summary>本機服務，例如 http://localhost:5000，或 TCP 服務 tcp://localhost:3306（MySQL）</summary>
     public string Service { get; set; } = "";
 
     /// <summary>本機服務為自簽憑證 https 時設為 true</summary>
     public bool NoTlsVerify { get; set; }
 
     public RouteConfig Clone() => new() { Hostname = Hostname, Service = Service, NoTlsVerify = NoTlsVerify };
+
+    /// <summary>TCP 轉發（例如 MySQL）：使用者端要用 cloudflared access tcp 連線，不能用瀏覽器開。</summary>
+    [JsonIgnore]
+    public bool IsTcp => Service.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>顯示用的對外位址：網站是 https://網址，TCP 是 tcp://網址。</summary>
+    [JsonIgnore]
+    public string PublicUrl => (IsTcp ? "tcp://" : "https://") + Hostname;
+
+    /// <summary>TCP 服務的連接埠（例如 3306）；不是 TCP 或沒有連接埠時為 null。</summary>
+    [JsonIgnore]
+    public int? TcpPort => IsTcp && Uri.TryCreate(Service, UriKind.Absolute, out var u) && u.Port is > 0 and <= 65535 ? u.Port : null;
+
+    /// <summary>
+    /// 使用者端的連線指令：在自己電腦開一個本機連接埠，經 Cloudflare 轉到這個服務。
+    /// 本機連接埠預設和服務相同（MySQL 就是 127.0.0.1:3306）。
+    /// </summary>
+    public string ClientCommand(int? localPort = null) =>
+        $"cloudflared access tcp --hostname {Hostname} --url 127.0.0.1:{localPort ?? TcpPort ?? 0}";
 }
 
 sealed partial class ToolConfig
@@ -87,8 +107,15 @@ sealed partial class ToolConfig
             if (!seen.Add(r.Hostname))
                 throw new InvalidOperationException($"網址 {r.Hostname} 重複設定。");
             if (!Uri.TryCreate(r.Service, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-                throw new InvalidOperationException($"{r.Hostname} 的本機服務位址必須是 http:// 或 https:// 開頭，目前是「{r.Service}」。");
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != "tcp"))
+                throw new InvalidOperationException($"{r.Hostname} 的本機服務位址必須是 http://、https:// 或 tcp:// 開頭，目前是「{r.Service}」。");
+            if (uri.Scheme == "tcp")
+            {
+                if (r.TcpPort is null || uri.AbsolutePath is not ("" or "/") || uri.Query != "" || uri.UserInfo != "")
+                    throw new InvalidOperationException($"{r.Hostname} 的 TCP 服務位址要寫成 tcp://主機:連接埠，例如 tcp://localhost:3306，目前是「{r.Service}」。");
+                r.Service = $"tcp://{uri.Host}:{uri.Port}"; // 去掉結尾的 /
+                r.NoTlsVerify = false; // 只對 https 有意義
+            }
         }
 
         if (RdpEnabled)

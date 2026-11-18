@@ -16,7 +16,7 @@ sealed class DashboardForm : Form
     readonly Label _subtitle;
     readonly StatusCard _serviceCard, _tunnelCard, _checkedCard;
     readonly ListView _routes;
-    readonly ListViewGroup _webGroup = new("網站／API");
+    readonly ListViewGroup _webGroup = new("網站／API／TCP");
     readonly ListViewGroup _rdpGroup = new("遠端桌面（瀏覽器 RDP ＋ 2FA）");
     readonly LogBox _log;
     readonly List<Button> _actions = [];
@@ -163,7 +163,12 @@ sealed class DashboardForm : Form
         _routes.Items.Clear();
         foreach (var r in _config.Routes)
         {
-            var item = new ListViewItem($"https://{r.Hostname}", _webGroup) { Tag = r, UseItemStyleForSubItems = false };
+            var item = new ListViewItem(r.PublicUrl, _webGroup)
+            {
+                Tag = r,
+                UseItemStyleForSubItems = false,
+                ToolTipText = r.IsTcp ? $"TCP，沒有登入保護。使用者端：{r.ClientCommand()}" : r.PublicUrl,
+            };
             item.SubItems.Add(r.Service);
             item.SubItems.Add("—");
             item.SubItems.Add("—");
@@ -235,6 +240,13 @@ sealed class DashboardForm : Form
             else WarpClient.OpenRdp(new ClientMachine { Name = m.Name, Ip = m.Ip, Port = m.Port }); // 區網內直接用 mstsc 測試
             return;
         }
+        if (item.Tag is RouteConfig { IsTcp: true } tcp)
+        {
+            // TCP 不能用瀏覽器開，改成複製給使用者的連線方式
+            Clipboard.SetText(Steps.DoneStep.TcpClientInfo(tcp));
+            _log.Ok($"{tcp.Hostname} 是 TCP 服務，已複製使用者端的連線方式：{tcp.ClientCommand()}");
+            return;
+        }
         Theme.OpenUrl(item.Text);
     }
 
@@ -279,7 +291,7 @@ sealed class DashboardForm : Form
             // 2. 本機網站 / API
             foreach (var c in await Deployer.CheckLocalServicesAsync(_config.Routes))
                 if (FindItem(c.Route) is { } item)
-                    SetSub(item, ColLocal, c.Ok ? "✓ 有回應" : "✗ 沒有回應", c.Ok ? Theme.Success : Theme.Danger);
+                    SetSub(item, ColLocal, c.Ok ? (c.Route.IsTcp ? "✓ 可以連線" : "✓ 有回應") : "✗ 沒有回應", c.Ok ? Theme.Success : Theme.Danger);
 
             // 2b. 遠端桌面：從這台電腦測試各台電腦的 RDP 連接埠
             if (_config.RdpEnabled)
