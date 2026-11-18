@@ -163,11 +163,13 @@ sealed class DashboardForm : Form
         _routes.Items.Clear();
         foreach (var r in _config.Routes)
         {
-            var item = new ListViewItem(r.PublicUrl, _webGroup)
+            var item = new ListViewItem(r.PublicUrl + (r.DisableBrowserCheck ? "（API）" : ""), _webGroup)
             {
                 Tag = r,
                 UseItemStyleForSubItems = false,
-                ToolTipText = r.IsTcp ? $"TCP，沒有登入保護。使用者端：{r.ClientCommand()}" : r.PublicUrl,
+                ToolTipText = r.IsTcp ? $"TCP，沒有登入保護。使用者端：{r.ClientCommand()}"
+                    : r.DisableBrowserCheck ? $"{r.PublicUrl}（API 用途：已關閉瀏覽器檢查，Python、curl 等程式可直接呼叫）"
+                    : r.PublicUrl,
             };
             item.SubItems.Add(r.Service);
             item.SubItems.Add("—");
@@ -247,7 +249,7 @@ sealed class DashboardForm : Form
             _log.Ok($"{tcp.Hostname} 是 TCP 服務，已複製使用者端的連線方式：{tcp.ClientCommand()}");
             return;
         }
-        Theme.OpenUrl(item.Text);
+        if (item.Tag is RouteConfig route) Theme.OpenUrl(route.PublicUrl);
     }
 
     void SetBusy(bool busy)

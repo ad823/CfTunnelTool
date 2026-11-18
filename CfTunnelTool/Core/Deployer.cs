@@ -96,6 +96,8 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
         foreach (var old in previousHostnames.Where(h => !current.Contains(h)))
             await DeleteTunnelDnsAsync(zone.ZoneId, old, target);
 
+        await SyncBrowserCheckAsync(zone.ZoneId, config, previous);
+
         // 瀏覽器遠端桌面 + 2FA
         var rdpDeployer = new RdpDeployer(cf, log, confirm);
         if (config.RdpEnabled)
@@ -184,6 +186,47 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
             }
         }
     }
+
+    /// <summary>勾選「API 用途」的網址：關閉 Browser Integrity Check。</summary>
+    static List<string> BrowserCheckHosts(ToolConfig config) =>
+        config.Routes.Where(r => r.DisableBrowserCheck && !r.IsTcp).Select(r => r.Hostname).Order(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// 同步這個 Tunnel 的「關閉瀏覽器檢查」規則。這一步失敗不影響網址本身，只顯示警告與手動設定方式。
+    /// </summary>
+    async Task SyncBrowserCheckAsync(string zoneId, ToolConfig config, ToolConfig? previous)
+    {
+        var hosts = BrowserCheckHosts(config);
+        var hadBefore = previous is not null && BrowserCheckHosts(previous).Count > 0;
+        if (hosts.Count == 0 && !hadBefore) return;
+
+        log.Step("設定 API 網址（關閉瀏覽器檢查）");
+        try
+        {
+            // 改了 Tunnel 名稱：舊名稱的規則要清掉
+            if (hadBefore && previous!.TunnelName != config.TunnelName)
+                await cf.SyncBrowserCheckRuleAsync(zoneId, previous.TunnelName, []);
+
+            var result = await cf.SyncBrowserCheckRuleAsync(zoneId, config.TunnelName, hosts);
+            if (result == BrowserCheckSync.Deleted)
+                log.Ok("已沒有 API 網址，已移除關閉瀏覽器檢查的規則");
+            foreach (var h in hosts)
+                log.Ok($"{h}：已關閉瀏覽器檢查，Python、curl 等程式可以直接呼叫");
+        }
+        catch (CloudflareApiException ex)
+        {
+            log.Warn(ex.IsForbidden
+                ? "API Token 沒有「Zone → Config Rules → Edit」權限，無法替 API 網址關閉瀏覽器檢查。"
+                : $"無法設定關閉瀏覽器檢查的規則：{ex.Message}");
+            if (hosts.Count > 0)
+                log.Warn(BrowserCheckManualHint(hosts));
+        }
+    }
+
+    internal static string BrowserCheckManualHint(IEnumerable<string> hosts) =>
+        "程式呼叫這些網址可能會被 Cloudflare 擋下（403 Error 1010）：" + string.Join("、", hosts) + "。" +
+        "請替 Token 加上「Zone → Config Rules → Edit」後重新部署；或到 Cloudflare 主控台 → 網域 → Rules → Configuration Rules " +
+        "新增規則，條件為 Hostname 等於上述網址，將 Browser Integrity Check 設為 Off。";
 
     async Task<TunnelInfo> WaitForHealthyAsync(string accountId, string tunnelId, TimeSpan timeout)
     {
@@ -280,6 +323,24 @@ sealed class Deployer(CloudflareClient cf, ILog log, Func<string, bool> confirm)
             await new RdpDeployer(cf, log, confirm).RemoveAsync(rdp, zone);
 
         var tunnel = await cf.FindTunnelAsync(zone.AccountId, config.TunnelName);
+
+        // 同名 Tunnel 是別台電腦的時候，規則也是它的，不要刪
+        if (BrowserCheckHosts(config).Count > 0 && (tunnel is null || config.TunnelId is null || tunnel.Id == config.TunnelId))
+        {
+            log.Step("移除關閉瀏覽器檢查的規則");
+            try
+            {
+                if (await cf.SyncBrowserCheckRuleAsync(zone.ZoneId, config.TunnelName, []) == BrowserCheckSync.Deleted)
+                    log.Ok("規則已移除");
+                else
+                    log.Ok("找不到規則，不需處理");
+            }
+            catch (CloudflareApiException ex)
+            {
+                log.Warn($"無法移除規則（{ex.Message}），請到 Cloudflare 主控台 → Rules → Configuration Rules 手動刪除。");
+            }
+        }
+
         if (tunnel is null)
         {
             log.Warn("Cloudflare 上找不到這個 Tunnel，略過 Tunnel 與 DNS 刪除");

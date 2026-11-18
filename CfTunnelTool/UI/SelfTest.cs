@@ -574,6 +574,34 @@ static class SelfTest
         Check("TCP：給使用者的連線說明含指令與連接埠",
             Steps.DoneStep.TcpClientInfo(tcpRoute) is var info && info.Contains(tcpRoute.ClientCommand()) && info.Contains("127.0.0.1"));
 
+        // ---- v1.11.0：API 網址關閉 Browser Integrity Check（避免 403 Error 1010） ----
+        var bicCfg = new ToolConfig { Domain = "example.com", TunnelName = "Office-1", Routes =
+        [
+            new RouteConfig { Hostname = "api.example.com", Service = "http://localhost:5000", DisableBrowserCheck = true },
+            new RouteConfig { Hostname = "db.example.com", Service = "tcp://localhost:3306", DisableBrowserCheck = true },
+        ] };
+        bicCfg.Validate();
+        Check("API 用途：http 網址保留勾選、TCP 網址自動取消",
+            bicCfg.Routes[0].DisableBrowserCheck && !bicCfg.Routes[1].DisableBrowserCheck);
+        Check("API 用途：Clone 保留勾選", bicCfg.Routes[0].Clone().DisableBrowserCheck);
+        var bicJson = JsonSerializer.Serialize(bicCfg.Routes[0]);
+        Check("API 用途：設定檔寫入與讀回",
+            bicJson.Contains("\"DisableBrowserCheck\":true") &&
+            JsonSerializer.Deserialize<RouteConfig>(bicJson)!.DisableBrowserCheck &&
+            !JsonSerializer.Deserialize<RouteConfig>("{\"Hostname\":\"a.example.com\",\"Service\":\"http://localhost\"}")!.DisableBrowserCheck, bicJson);
+        Check("API 用途：規則 ref 依 Tunnel 名稱", CloudflareClient.BrowserCheckRuleRef("Office-1") == "cftunneltool_bic_office_1",
+            CloudflareClient.BrowserCheckRuleRef("Office-1"));
+        var bicExpr = CloudflareClient.BrowserCheckExpression(["b.example.com", "a.example.com"]);
+        Check("API 用途：規則條件排序後列出網址", bicExpr == "(http.host in {\"a.example.com\" \"b.example.com\"})", bicExpr);
+        var bicRule = CloudflareClient.BrowserCheckRule("Office-1", ["api.example.com"]).ToJsonString();
+        sb.AppendLine("INFO  BrowserCheckRule = " + bicRule);
+        Check("API 用途：規則內容 set_config、bic=false、帶 ref",
+            bicRule.Contains("\"ref\":\"cftunneltool_bic_office_1\"") && bicRule.Contains("\"action\":\"set_config\"") &&
+            bicRule.Contains("\"action_parameters\":{\"bic\":false}") && bicRule.Contains("\"enabled\":true"), bicRule);
+        Check("API 用途：手動設定說明列出網址與權限",
+            Deployer.BrowserCheckManualHint(["api.example.com"]) is var hint && hint.Contains("api.example.com") &&
+            hint.Contains("Config Rules") && hint.Contains("1010"));
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

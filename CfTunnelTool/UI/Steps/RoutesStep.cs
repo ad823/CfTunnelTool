@@ -4,7 +4,7 @@ namespace CfTunnelTool.UI.Steps;
 
 sealed class RoutesStep : StepPage
 {
-    const int ColSub = 0, ColDomain = 1, ColService = 2, ColTls = 3, ColLocal = 4;
+    const int ColSub = 0, ColDomain = 1, ColService = 2, ColTls = 3, ColApi = 4, ColLocal = 5;
 
     readonly WizardState _state;
     readonly DataGridView _grid;
@@ -26,11 +26,11 @@ sealed class RoutesStep : StepPage
         Add(_grid);
 
         var addWeb = Theme.SecondaryButton("+ 新增網站");
-        addWeb.Click += (_, _) => AddGridRow(NextFreeSub("www"), "http://localhost:80", false, focus: true);
+        addWeb.Click += (_, _) => AddGridRow(NextFreeSub("www"), "http://localhost:80", false, false, focus: true);
         var addApi = Theme.SecondaryButton("+ 新增 API");
-        addApi.Click += (_, _) => AddGridRow(NextFreeSub("api"), "http://localhost:5000", false, focus: true);
+        addApi.Click += (_, _) => AddGridRow(NextFreeSub("api"), "http://localhost:5000", false, true, focus: true);
         var addTcp = Theme.SecondaryButton("+ 新增 TCP");
-        addTcp.Click += (_, _) => AddGridRow(NextFreeSub("mysql"), "tcp://localhost:3306", false, focus: true);
+        addTcp.Click += (_, _) => AddGridRow(NextFreeSub("mysql"), "tcp://localhost:3306", false, false, focus: true);
         var remove = Theme.SecondaryButton("刪除選取的列");
         remove.Click += (_, _) => RemoveSelectedRows();
         _test = Theme.SecondaryButton("測試本機服務");
@@ -46,6 +46,9 @@ sealed class RoutesStep : StepPage
             "•  Node.js、Python 等：程式監聽的連接埠，例如 http://localhost:3000\n" +
             "•  也可以只輸入連接埠數字，例如 5000，程式會自動補成 http://localhost:5000\n" +
             "•  服務只接受 https 且使用自簽憑證時，請勾選「自簽憑證」\n" +
+            "•  「API 用途」：給程式（Python、curl、手機 App 等）呼叫的網址請勾選，會關閉 Cloudflare 的瀏覽器檢查；" +
+            "沒勾的話，程式用預設設定呼叫可能被擋（403 Error 1010）。給人用瀏覽器開的網站不用勾，保留防護。" +
+            "需要 Token 有「Zone → Config Rules → Edit」權限\n" +
             "•  MySQL、SQL Server 等 TCP 服務：填 tcp://主機:連接埠，例如 tcp://localhost:3306。" +
             "使用者端要安裝 cloudflared 並執行連線指令（完成畫面和管理畫面會顯示），不能用瀏覽器開\n" +
             "•  子網域留空，代表直接使用網域本身（例如 https://yourdomain.com）");
@@ -84,9 +87,15 @@ sealed class RoutesStep : StepPage
         domainCol.DefaultCellStyle.ForeColor = Theme.Muted;
         domainCol.DefaultCellStyle.BackColor = Theme.Surface;
         grid.Columns.Add(domainCol);
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "本機服務位址", FillWeight = 30 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "自簽憑證", FillWeight = 12 });
-        var localCol = new DataGridViewTextBoxColumn { HeaderText = "本機狀態", FillWeight = 16, ReadOnly = true };
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "本機服務位址", FillWeight = 28 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "自簽憑證", FillWeight = 11 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            HeaderText = "API 用途",
+            FillWeight = 11,
+            ToolTipText = "給程式呼叫的網址：關閉 Cloudflare 的瀏覽器檢查，避免 Python、curl 等被擋（403 Error 1010）",
+        });
+        var localCol = new DataGridViewTextBoxColumn { HeaderText = "本機狀態", FillWeight = 14, ReadOnly = true };
         localCol.DefaultCellStyle.BackColor = Theme.Surface;
         grid.Columns.Add(localCol);
         foreach (DataGridViewColumn c in grid.Columns) c.SortMode = DataGridViewColumnSortMode.NotSortable;
@@ -100,6 +109,8 @@ sealed class RoutesStep : StepPage
         {
             if (e.RowIndex >= 0 && e.ColumnIndex is ColSub or ColService)
                 SetLocalCell(grid.Rows[e.RowIndex], "", Theme.Muted);
+            if (e.RowIndex >= 0 && e.ColumnIndex == ColService)
+                UpdateApiCell(grid.Rows[e.RowIndex]);
             UpdatePreview();
         };
         grid.RowsRemoved += (_, _) => { UpdatePreview(); NotifyStateChanged(); };
@@ -120,13 +131,13 @@ sealed class RoutesStep : StepPage
                 foreach (var r in _state.Routes)
                 {
                     var sub = r.Hostname == _state.Domain ? "" : r.Hostname[..^(_state.Domain.Length + 1)];
-                    AddGridRow(sub, r.Service, r.NoTlsVerify);
+                    AddGridRow(sub, r.Service, r.NoTlsVerify, r.DisableBrowserCheck);
                 }
             }
             else
             {
-                AddGridRow("www", "http://localhost:80", false);
-                AddGridRow("api", "http://localhost:5000", false);
+                AddGridRow("www", "http://localhost:80", false, false);
+                AddGridRow("api", "http://localhost:5000", false, true);
             }
             _ = TestLocalAsync();
         }
@@ -143,15 +154,27 @@ sealed class RoutesStep : StepPage
             if (!used.Contains($"{prefix}{i}.{_state.Domain}")) return $"{prefix}{i}";
     }
 
-    void AddGridRow(string sub, string service, bool noTls, bool focus = false)
+    void AddGridRow(string sub, string service, bool noTls, bool api, bool focus = false)
     {
-        var i = _grid.Rows.Add(sub, DomainSuffix, service, noTls, "");
+        var i = _grid.Rows.Add(sub, DomainSuffix, service, noTls, api, "");
+        UpdateApiCell(_grid.Rows[i]);
         if (focus)
         {
             _grid.Focus();
             _grid.CurrentCell = _grid.Rows[i].Cells[ColService];
         }
         UpdatePreview();
+    }
+
+    /// <summary>TCP 不經過瀏覽器檢查，「API 用途」不適用：取消勾選並鎖住。</summary>
+    static void UpdateApiCell(DataGridViewRow row)
+    {
+        var cell = row.Cells[ColApi];
+        var tcp = (row.Cells[ColService].Value as string ?? "").Trim().StartsWith("tcp://", StringComparison.OrdinalIgnoreCase);
+        if (tcp && cell.Value is true) cell.Value = false;
+        cell.ReadOnly = tcp;
+        cell.Style.BackColor = tcp ? Theme.Surface : Color.Empty;
+        cell.ToolTipText = tcp ? "TCP 不經過瀏覽器檢查，不需要勾選" : "";
     }
 
     void RemoveSelectedRows()
@@ -171,7 +194,13 @@ sealed class RoutesStep : StepPage
             var svc = ToolConfig.NormalizeService(row.Cells[ColService].Value as string ?? "");
             if (sub.Length == 0 && svc.Length == 0) continue;
             var host = sub is "" or "@" ? _state.Domain : $"{sub}.{_state.Domain}";
-            list.Add((row, new RouteConfig { Hostname = host, Service = svc, NoTlsVerify = row.Cells[ColTls].Value is true }));
+            list.Add((row, new RouteConfig
+            {
+                Hostname = host,
+                Service = svc,
+                NoTlsVerify = row.Cells[ColTls].Value is true,
+                DisableBrowserCheck = row.Cells[ColApi].Value is true && !svc.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase),
+            }));
         }
         return list;
     }
@@ -181,7 +210,8 @@ sealed class RoutesStep : StepPage
         var rows = ReadRows();
         _preview.Text = rows.Count == 0
             ? "（尚未設定任何網址）"
-            : string.Join("\n", rows.Select(x => $"{x.Route.PublicUrl}  →  {x.Route.Service}"));
+            : string.Join("\n", rows.Select(x => $"{x.Route.PublicUrl}  →  {x.Route.Service}" +
+                                                  (x.Route.DisableBrowserCheck ? "　（API：關閉瀏覽器檢查）" : "")));
     }
 
     static void SetLocalCell(DataGridViewRow row, string text, Color color)

@@ -26,6 +26,7 @@ Windows 圖形介面工具，用 **Cloudflare Tunnel** 做兩件事：
 - [三種使用模式](#三種使用模式)
 - [管理者：設定精靈](#管理者設定精靈)
 - [管理者：管理畫面](#管理者管理畫面)
+- [API 網址（給程式呼叫）](#api-網址給程式呼叫)
 - [TCP 服務（例如 MySQL）](#tcp-服務例如-mysql)
 - [遠端桌面](#遠端桌面)
 - [使用者端](#使用者端)
@@ -70,7 +71,7 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 是給實際操作人員
 |---|---|
 | 1. API Token | 按按鈕開啟 Cloudflare 頁面，依畫面上的權限表建立 Token、貼上、驗證（程式會檢查權限是否足夠） |
 | 2. 網域 | 從下拉選單選網域，取一個 Tunnel 名稱（預設為電腦名稱） |
-| 3. 網址 | 設定「子網域 → 本機服務」，例如 `api` → `http://localhost:5000`、`mysql` → `tcp://localhost:3306`，可直接測試本機服務（只用遠端桌面可以不設） |
+| 3. 網址 | 設定「子網域 → 本機服務」，例如 `api` → `http://localhost:5000`、`mysql` → `tcp://localhost:3306`，給程式呼叫的網址勾選「API 用途」，可直接測試本機服務（只用遠端桌面可以不設） |
 | 4. 遠端桌面（選用） | 連線方式、要開放的電腦、允許登入的 Email、2FA 方式與有效時間、剪貼簿與檔案傳輸權限 |
 | 5. 部署 | 按「開始部署」，自動完成 Tunnel、DNS、Zero Trust 政策、下載 cloudflared、安裝服務，即時顯示進度 |
 
@@ -81,6 +82,7 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 是給實際操作人員
 | Account | Cloudflare Tunnel | Edit | 必要 |
 | Zone | DNS | Edit | 必要 |
 | Zone | Zone | Read | 必要 |
+| Zone | Config Rules | Edit | API 用途 |
 | Account | Access: Apps and Policies | Edit | 遠端桌面 |
 | Account | Access: Organizations, Identity Providers, and Groups | Edit | 遠端桌面 |
 | Account | Zero Trust | Edit | 遠端桌面 |
@@ -122,6 +124,21 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 是給實際操作人員
 - **忘記密碼**：登入畫面按「忘記密碼…」，輸入這個地點的 Cloudflare API Token，驗證 Token 能存取這個網域與 Tunnel 後重新設定。已儲存的 Token 不能用來重設，已部署的電腦刪除 `admin.dat` 也一樣要通過這個驗證
 - **從舊版升級**：第一次開啟時會先要求 Cloudflare 驗證，再設定帳號密碼
 - 「設定 → 應用程式」解除安裝時，已部署的電腦也要先登入
+
+## API 網址（給程式呼叫）
+
+Cloudflare 預設開啟 **Browser Integrity Check（瀏覽器檢查）**，會擋下看起來不是瀏覽器的請求。Python（`requests`、`urllib`、`httpx`）等程式用預設設定呼叫時，常會收到 **HTTP 403、Error 1010（browser_signature_banned）**；Postman、瀏覽器則正常。
+
+精靈第 3 步替給程式呼叫的網址勾選 **「API 用途」**（按「+ 新增 API」新增的列預設勾選），部署時程式會在網域的 Configuration Rules 建立一條規則，只替這些網址關閉瀏覽器檢查：
+
+| 項目 | 說明 |
+|---|---|
+| 規則 | `http.host in {"api.yourdomain.com" …}` → Browser Integrity Check 關閉 |
+| 範圍 | 每個 Tunnel 一條規則（ref `cftunneltool_bic_<Tunnel 名稱>`），只新增／修改／刪除自己那一條，不會動到你手動加的其他規則 |
+| 權限 | API Token 要有 `Zone → Config Rules → Edit`；沒有時部署照常完成，只顯示警告與手動設定方式 |
+| 取消 | 取消勾選後重新部署，或移除部署，規則會一併刪除 |
+
+給人用瀏覽器開的網站不用勾，保留防護。TCP 網址不經過瀏覽器檢查，不能勾。若勾選後程式仍被擋，請到 Cloudflare 主控台 → Security → Events 用回應的 `cf-ray` 查是哪個功能擋的；免費方案的 **Bot Fight Mode** 無法用規則排除，只能在 Security → Bots 關閉。
 
 ## TCP 服務（例如 MySQL）
 
@@ -252,7 +269,7 @@ WARP 的設定套用到帳號的預設裝置設定，但只影響被開放的 IP
 - **內部網路的電腦仍可直接嘗試登入遠端桌面**：此時只靠 NLA 與 Windows 密碼強度
 - **沒有裝置狀態檢查（device posture）**：中毒的電腦只要使用者通過 2FA 仍可連線
 - **沒有主動告警**：紀錄需要人去看
-- **網站和 API 是公開的**：任何人都能連線，請自行做好登入驗證；只給內部使用的網址可以在 Cloudflare → Zero Trust → Access → Applications 加上登入保護
+- **網站和 API 是公開的**：任何人都能連線，請自行做好登入驗證；勾選「API 用途」的網址還會關閉 Cloudflare 的瀏覽器檢查；只給內部使用的網址可以在 Cloudflare → Zero Trust → Access → Applications 加上登入保護
 - **TCP 服務（例如 MySQL）也是公開的**：程式不會替 `tcp://` 網址加登入保護，只靠服務本身的帳號密碼
 - 部署時不會覆寫你現有的 DNS 紀錄或別台電腦的 Tunnel，遇到衝突會先停下來詢問
 
@@ -310,7 +327,7 @@ CfTunnelTool\bin\Debug\net9.0-windows\CfTunnelTool.exe --screenshots %TEMP%\cftu
 CfTunnelTool\bin\Debug\net9.0-windows\CfTunnelTool.exe --selftest %TEMP%\cftunnel-selftest.txt
 ```
 
-自我測試涵蓋：遠端桌面主機狀態與 NLA 判斷（含 Entra ID 例外）、防火牆規則、管理帳號密碼、桌面捷徑參數與路徑、TCP 網址轉發、設定驗證規則、連線代碼、送給 Cloudflare 的 JSON 結構、API 錯誤處理。
+自我測試涵蓋：遠端桌面主機狀態與 NLA 判斷（含 Entra ID 例外）、防火牆規則、管理帳號密碼、桌面捷徑參數與路徑、TCP 網址轉發、API 網址關閉瀏覽器檢查、設定驗證規則、連線代碼、送給 Cloudflare 的 JSON 結構、API 錯誤處理。
 
 ### 發布新版本
 
