@@ -164,22 +164,25 @@ sealed partial class CloudflareClient : IDisposable
     public async Task<string> GetTunnelTokenAsync(string accountId, string tunnelId)
         => (await SendAsync(HttpMethod.Get, $"accounts/{accountId}/cfd_tunnel/{tunnelId}/token"))!.GetValue<string>();
 
-    public async Task PutTunnelConfigAsync(string accountId, string tunnelId, IEnumerable<RouteConfig> routes)
+    /// <summary>Tunnel 的 ingress 規則：每個網址一條（http、https 或 tcp），最後是 catch-all。</summary>
+    internal static List<object> IngressRules(IEnumerable<RouteConfig> routes)
     {
         var ingress = new List<object>();
         foreach (var r in routes)
         {
-            if (r.NoTlsVerify)
+            if (r.NoTlsVerify && !r.IsTcp)
                 ingress.Add(new { hostname = r.Hostname, service = r.Service, originRequest = new { noTLSVerify = true } });
             else
                 ingress.Add(new { hostname = r.Hostname, service = r.Service });
         }
         // 最後一條必須是不帶 hostname 的 catch-all 規則
         ingress.Add(new { service = "http_status:404" });
-
-        await SendAsync(HttpMethod.Put, $"accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations",
-            new { config = new { ingress } });
+        return ingress;
     }
+
+    public async Task PutTunnelConfigAsync(string accountId, string tunnelId, IEnumerable<RouteConfig> routes)
+        => await SendAsync(HttpMethod.Put, $"accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations",
+            new { config = new { ingress = IngressRules(routes) } });
 
     public async Task<List<string>> GetTunnelHostnamesAsync(string accountId, string tunnelId)
     {

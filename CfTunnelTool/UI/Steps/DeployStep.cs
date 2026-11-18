@@ -73,8 +73,8 @@ sealed class DeployStep : StepPage
         };
         if (_state.Routes.Count > 0)
         {
-            lines.Add("網站／API：");
-            lines.AddRange(_state.Routes.Select(r => $"      https://{r.Hostname}  →  {r.Service}"));
+            lines.Add("網站／API／TCP：");
+            lines.AddRange(_state.Routes.Select(r => $"      {r.PublicUrl}  →  {r.Service}" + (r.IsTcp ? "（沒有登入保護）" : "")));
         }
         if (_state.Rdp is { Enabled: true } rdp)
         {

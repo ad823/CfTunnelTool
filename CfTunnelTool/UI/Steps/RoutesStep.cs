@@ -13,14 +13,14 @@ sealed class RoutesStep : StepPage
     bool _loaded;
 
     public override string SidebarTitle => "網址";
-    public override string Heading => "步驟 3／5　設定對外網址（網站／API）";
+    public override string Heading => "步驟 3／5　設定對外網址（網站／API／TCP）";
 
     public RoutesStep(WizardState state)
     {
         _state = state;
 
-        AddText("每一列代表一個對外網址，以及它要轉到這台電腦上的哪個服務。網站和 API 各一列，可以自由新增或刪除。" +
-                "只需要遠端桌面的話，可以刪除所有列，直接到下一步。");
+        AddText("每一列代表一個對外網址，以及它要轉到這台電腦上的哪個服務。網站和 API 各一列，可以自由新增或刪除；" +
+                "MySQL 等非網頁服務用 tcp:// 開頭。只需要遠端桌面的話，可以刪除所有列，直接到下一步。");
 
         _grid = BuildGrid();
         Add(_grid);
@@ -29,11 +29,13 @@ sealed class RoutesStep : StepPage
         addWeb.Click += (_, _) => AddGridRow(NextFreeSub("www"), "http://localhost:80", false, focus: true);
         var addApi = Theme.SecondaryButton("+ 新增 API");
         addApi.Click += (_, _) => AddGridRow(NextFreeSub("api"), "http://localhost:5000", false, focus: true);
+        var addTcp = Theme.SecondaryButton("+ 新增 TCP");
+        addTcp.Click += (_, _) => AddGridRow(NextFreeSub("mysql"), "tcp://localhost:3306", false, focus: true);
         var remove = Theme.SecondaryButton("刪除選取的列");
         remove.Click += (_, _) => RemoveSelectedRows();
         _test = Theme.SecondaryButton("測試本機服務");
         _test.Click += async (_, _) => await TestLocalAsync();
-        AddRow(addWeb, addApi, remove, _test);
+        AddRow(addWeb, addApi, addTcp, remove, _test);
 
         AddText("設定結果預覽：", Theme.Bold, top: 10, bottom: 2);
         _preview = AddText("", Theme.Mono, Theme.Text, bottom: 6);
@@ -44,6 +46,8 @@ sealed class RoutesStep : StepPage
             "•  Node.js、Python 等：程式監聽的連接埠，例如 http://localhost:3000\n" +
             "•  也可以只輸入連接埠數字，例如 5000，程式會自動補成 http://localhost:5000\n" +
             "•  服務只接受 https 且使用自簽憑證時，請勾選「自簽憑證」\n" +
+            "•  MySQL、SQL Server 等 TCP 服務：填 tcp://主機:連接埠，例如 tcp://localhost:3306。" +
+            "使用者端要安裝 cloudflared 並執行連線指令（完成畫面和管理畫面會顯示），不能用瀏覽器開\n" +
             "•  子網域留空，代表直接使用網域本身（例如 https://yourdomain.com）");
     }
 
@@ -177,7 +181,7 @@ sealed class RoutesStep : StepPage
         var rows = ReadRows();
         _preview.Text = rows.Count == 0
             ? "（尚未設定任何網址）"
-            : string.Join("\n", rows.Select(x => $"https://{x.Route.Hostname}  →  {x.Route.Service}"));
+            : string.Join("\n", rows.Select(x => $"{x.Route.PublicUrl}  →  {x.Route.Service}"));
     }
 
     static void SetLocalCell(DataGridViewRow row, string text, Color color)
@@ -200,7 +204,7 @@ sealed class RoutesStep : StepPage
             for (int i = 0; i < rows.Count; i++)
             {
                 if (rows[i].Row.DataGridView is null) continue; // 已被刪除
-                if (results[i].Ok) SetLocalCell(rows[i].Row, "✓ 有回應", Theme.Success);
+                if (results[i].Ok) SetLocalCell(rows[i].Row, rows[i].Route.IsTcp ? "✓ 可以連線" : "✓ 有回應", Theme.Success);
                 else SetLocalCell(rows[i].Row, "✗ 沒有回應", Theme.Danger);
             }
         }
@@ -238,7 +242,23 @@ sealed class RoutesStep : StepPage
                 "本機服務沒有回應", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
             return false;
 
+        if (probe.Routes.Any(r => r.IsTcp) && !ConfirmTcpExposure(probe.Routes.Where(r => r.IsTcp)))
+            return false;
+
         _state.Routes = probe.Routes;
         return true;
     }
+
+    /// <summary>TCP 網址沒有 Cloudflare 登入保護，提醒管理者這個服務等於對外公開。</summary>
+    bool ConfirmTcpExposure(IEnumerable<RouteConfig> tcp) =>
+        MessageBox.Show(FindForm(),
+            "TCP 網址沒有 Cloudflare 登入保護：\n" +
+            string.Join("\n", tcp.Select(r => $"    {r.PublicUrl}  →  {r.Service}")) + "\n\n" +
+            "任何知道網址並安裝 cloudflared 的人，都能直接連到這個服務，只剩服務本身的帳號密碼保護。\n\n" +
+            "請確認：\n" +
+            "•  使用強密碼，MySQL 不要允許 root 從遠端登入\n" +
+            "•  遠端帳號只給需要的資料庫與權限\n" +
+            "•  服務已更新到最新版本\n\n" +
+            "確定要開放嗎？",
+            "TCP 服務會對外公開", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
 }

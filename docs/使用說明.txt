@@ -3,7 +3,7 @@ CfTunnelTool 使用說明
 
 CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   - 對外網址：讓外網用你自己的網域（例如 https://api.yourdomain.com）
-    連到這台電腦上的網站和 API
+    連到這台電腦上的網站和 API，也可以轉發 MySQL 等 TCP 服務（tcp://）
   - 遠端桌面：讓使用者從外面連到公司內的電腦，連線前要先通過 Email 驗證碼和 2FA
 
 不需要固定 IP、不用設定路由器，遠端桌面連接埠完全不對外。
@@ -74,6 +74,9 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
      步驟 2  選擇網域，設定 Tunnel 名稱（預設為電腦名稱；多個地點要用不同名稱）
 
      步驟 3  對外網址，例如 api → http://localhost:5000（只用遠端桌面可以不設）
+             MySQL 等 TCP 服務：按「+ 新增 TCP」（預設 MySQL 的 3306），或填 tcp://localhost:3306
+             （區網其他電腦：tcp://192.168.1.20:3306）。按下一步時會再確認一次，
+             因為 TCP 網址沒有登入保護（見第九章）。
 
      步驟 4  遠端桌面（選用）
              - 勾選「啟用遠端桌面（RDP）＋ 2FA」
@@ -104,6 +107,15 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   - 中繼電腦本身在開放清單中時：遠端桌面防火牆只允許內部網路、開啟 NLA
 
   從舊版升級：用新版重新部署每一個地點，才會套用最新的 Cloudflare 設定。
+
+  TCP 服務（例如 MySQL）的使用方式：
+  TCP 網址不能用瀏覽器開，MySQL 用戶端也不能直接連網址。使用者端要：
+    1. 安裝 cloudflared（只要一次）：winget install --id Cloudflare.cloudflared
+    2. 每次連線前執行，視窗保持開著：
+         cloudflared access tcp --hostname mysql.yourdomain.com --url 127.0.0.1:3306
+    3. MySQL Workbench 等程式改連 127.0.0.1:3306，帳號密碼和原本一樣
+  自己電腦的 3306 已被占用時，把指令最後的連接埠改成其他號碼（例如 13306）。
+  完成頁點 TCP 網址，或管理畫面選取後按「開啟選取的網址」，會複製這份說明給使用者。
 
 
 ■ 四、管理者：管理畫面與管理帳號密碼
@@ -265,6 +277,9 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   7. 有敏感資料時，關閉瀏覽器方式的檔案下載
   8. 網站和 API 公開後任何人都能連線，請務必做好登入驗證；只給內部使用的網址，
      可以在 Cloudflare → Zero Trust → Access → Applications 加上登入保護
+  9. TCP 服務（例如 MySQL）沒有登入保護：任何知道網址並安裝 cloudflared 的人
+     都能連線，只靠資料庫本身的帳號密碼。請用強密碼、不要讓 root 從遠端登入、
+     遠端帳號只給需要的資料庫與權限
 
 
 ■ 十、常見問題
@@ -282,6 +297,12 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   Q：連線時跳出「需要重新驗證 2FA」，但沒有看到驗證網頁？
   A：按視窗裡的「重新開啟驗證頁」；仍然沒有出現時，點右下角 WARP 圖示 →
      個人資料 → 帳戶資訊 → 重新驗證。完成後等候視窗會自動連線。
+
+  Q：cloudflared access tcp 執行後，MySQL 還是連不上？
+  A：1. 程式要連 127.0.0.1 和指令裡的連接埠，不是 mysql.yourdomain.com
+     2. 指令視窗要保持開著；出現「address already in use」代表本機連接埠被占用，換一個號碼
+     3. 管理畫面確認該 TCP 網址的本機狀態為「可以連線」、DNS 正常
+     4. MySQL 的帳號要允許從中繼電腦連線（例如 'user'@'localhost' 或 'user'@'中繼電腦 IP'）
 
   Q：WARP 連不到公司的電腦？
   A：1. 使用者畫面確認 WARP 為「已連線」、2FA 有效；到期就按「立即重新驗證」

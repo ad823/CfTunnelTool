@@ -41,6 +41,7 @@ sealed class DoneStep : StepPage
         AddHelpBox("資安提醒",
             "公開的網站和 API 任何人都能連線，請務必做好登入驗證；只給內部人員使用的網址，" +
             "可以到 Cloudflare 後台 → Zero Trust → Access → Applications 加上登入保護。\n" +
+            "TCP 服務（例如 MySQL）同樣沒有登入保護，請使用強密碼、不要讓 root 從遠端登入。\n" +
             "遠端桌面已經有 Email ＋ 2FA 保護，但 Windows 帳號仍請使用強密碼。",
             Theme.WarnBack, Theme.Danger);
     }
@@ -76,6 +77,45 @@ sealed class DoneStep : StepPage
         });
     }
 
+    /// <summary>TCP 網址不能用瀏覽器開：點一下複製使用者端的 cloudflared 連線指令。</summary>
+    void AddTcp(FlowLayoutPanel panel, RouteConfig r)
+    {
+        var link = new LinkLabel
+        {
+            Text = $"{r.PublicUrl}（複製連線指令）",
+            AutoSize = true,
+            Font = Theme.Sub,
+            LinkColor = Theme.AccentDark,
+            ActiveLinkColor = Theme.Accent,
+            Margin = new Padding(0, 4, 0, 0),
+        };
+        link.LinkClicked += (_, _) =>
+        {
+            Clipboard.SetText(TcpClientInfo(r));
+            MessageBox.Show(FindForm(), "TCP 連線方式已複製，可以直接貼給使用者。", "已複製", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        panel.Controls.Add(link);
+        panel.Controls.Add(new Label
+        {
+            Text = $"→ 這台電腦的 {r.Service}（沒有登入保護）\n使用者端：{r.ClientCommand()}，再連 127.0.0.1:{r.TcpPort}",
+            AutoSize = true,
+            ForeColor = Theme.Muted,
+            Margin = new Padding(2, 0, 0, 6),
+        });
+    }
+
+    /// <summary>給 TCP 服務使用者的連線說明，可以直接貼到 Email 或通訊軟體。</summary>
+    public static string TcpClientInfo(RouteConfig r) => string.Join(Environment.NewLine,
+        $"【{r.Hostname} 連線方式】",
+        "",
+        "1. 安裝 cloudflared（只要一次）：",
+        "   winget install --id Cloudflare.cloudflared",
+        "   或到 https://github.com/cloudflare/cloudflared/releases 下載 cloudflared-windows-amd64.exe",
+        "2. 每次連線前先執行下面這行，視窗保持開著：",
+        $"   {r.ClientCommand()}",
+        $"3. 用程式連 127.0.0.1:{r.TcpPort}（例如 MySQL Workbench 的 Hostname 填 127.0.0.1、Port 填 {r.TcpPort}），帳號密碼和原本一樣",
+        $"   如果自己電腦的 {r.TcpPort} 已被占用，把指令最後的 {r.TcpPort} 改成其他連接埠（例如 13306），程式也改連那個連接埠。");
+
     public override void OnEnter()
     {
         var result = _state.Result;
@@ -97,7 +137,13 @@ sealed class DoneStep : StepPage
 
         _links.Controls.Clear();
         foreach (var r in _state.Routes)
-            AddLink(_links, $"https://{r.Hostname}", $"https://{r.Hostname}", $"→ 這台電腦的 {r.Service}", Theme.Sub);
+        {
+            if (r.IsTcp) AddTcp(_links, r);
+            else AddLink(_links, r.PublicUrl, r.PublicUrl, $"→ 這台電腦的 {r.Service}", Theme.Sub);
+        }
+        _webTitle.Text = _state.Routes.Any(r => r.IsTcp)
+            ? "網站／API／TCP（網址點一下開啟；TCP 點一下複製使用者端的連線指令）："
+            : "網站／API（點一下即可開啟）：";
         _webTitle.Visible = _links.Visible = _state.Routes.Count > 0;
 
         _rdpLinks.Controls.Clear();

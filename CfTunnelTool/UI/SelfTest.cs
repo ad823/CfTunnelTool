@@ -488,6 +488,41 @@ static class SelfTest
             !WarpClient.RdpFilePath(plainMachine).StartsWith(desktop, StringComparison.OrdinalIgnoreCase));
         Check("等候驗證：最多等 3 分鐘", AuthWaitForm.WaitLimit == TimeSpan.FromMinutes(3));
 
+        // ---- v1.10.0：網址轉發支援 tcp://（例如 MySQL） ----
+        static string? TcpError(string service)
+        {
+            var c = new ToolConfig { Domain = "example.com", TunnelName = "t",
+                Routes = [new RouteConfig { Hostname = "db.example.com", Service = service }] };
+            try { c.Validate(); return null; }
+            catch (InvalidOperationException ex) { return ex.Message; }
+        }
+        var tcpCfg = new ToolConfig { Domain = "example.com", TunnelName = "t",
+            Routes = [new RouteConfig { Hostname = "db.example.com", Service = " tcp://localhost:3306/ ", NoTlsVerify = true }] };
+        tcpCfg.Validate();
+        var tcpRoute = tcpCfg.Routes[0];
+        Check("TCP：接受 tcp://主機:連接埠並整理格式、清掉自簽憑證",
+            tcpRoute is { Service: "tcp://localhost:3306", NoTlsVerify: false, IsTcp: true, TcpPort: 3306 }, tcpRoute.Service);
+        Check("TCP：接受區網 IP", TcpError("tcp://192.168.1.20:3306") is null);
+        Check("TCP：沒有連接埠會被拒絕", TcpError("tcp://localhost") is { } e1 && e1.Contains("tcp://主機:連接埠"), TcpError("tcp://localhost") ?? "null");
+        Check("TCP：帶路徑會被拒絕", TcpError("tcp://localhost:3306/db") is not null);
+        Check("TCP：其他協定仍會被拒絕", TcpError("ftp://localhost:21") is { } e2 && e2.Contains("tcp://"));
+        Check("TCP：http 網址不受影響", TcpError("http://localhost:8080") is null &&
+            !new RouteConfig { Hostname = "w.example.com", Service = "http://localhost:8080" }.IsTcp);
+        Check("TCP：顯示位址與使用者端指令",
+            tcpRoute.PublicUrl == "tcp://db.example.com" &&
+            tcpRoute.ClientCommand() == "cloudflared access tcp --hostname db.example.com --url 127.0.0.1:3306" &&
+            tcpRoute.ClientCommand(13306).EndsWith("127.0.0.1:13306"), tcpRoute.ClientCommand());
+        var ingressJson = JsonSerializer.Serialize(CloudflareClient.IngressRules(
+            [tcpRoute, new RouteConfig { Hostname = "w.example.com", Service = "https://localhost:8443", NoTlsVerify = true }]));
+        sb.AppendLine("INFO  IngressRules = " + ingressJson);
+        Check("TCP：ingress 直接轉 tcp://、不帶 originRequest，最後是 404",
+            ingressJson.StartsWith("[{\"hostname\":\"db.example.com\",\"service\":\"tcp://localhost:3306\"}") &&
+            ingressJson.Contains("\"noTLSVerify\":true") && ingressJson.EndsWith("{\"service\":\"http_status:404\"}]"), ingressJson);
+        Check("TCP：設定檔不寫入計算出來的欄位",
+            !JsonSerializer.Serialize(tcpRoute).Contains("IsTcp") && !JsonSerializer.Serialize(tcpRoute).Contains("PublicUrl"));
+        Check("TCP：給使用者的連線說明含指令與連接埠",
+            Steps.DoneStep.TcpClientInfo(tcpRoute) is var info && info.Contains(tcpRoute.ClientCommand()) && info.Contains("127.0.0.1"));
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {
