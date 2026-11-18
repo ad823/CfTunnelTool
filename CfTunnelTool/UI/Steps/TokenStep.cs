@@ -31,7 +31,7 @@ sealed class TokenStep : StepPage
             "1.  按下方「開啟 Cloudflare Token 頁面」，並登入 Cloudflare\n" +
             "2.  按「Create Token」，捲到最下方「Create Custom Token」，按「Get started」\n" +
             "3.  Token name 填：CfTunnelTool\n" +
-            "4.  在 Permissions 依下表設定權限（按「+ Add more」新增一列）；只用網站／API 設前三列即可；用遠端桌面再加「遠端桌面」三列；要收集登入與網路紀錄再加「紀錄」兩列\n" +
+            "4.  在 Permissions 依下表設定權限（按「+ Add more」新增一列）；只用網站／API 設前三列即可；有給程式呼叫的 API 網址再加「API 用途」一列；用遠端桌面再加「遠端桌面」三列；要收集登入與網路紀錄再加「紀錄」兩列\n" +
             "5.  Zone Resources 選「Include → Specific zone → 你的網域」\n" +
             "6.  按「Continue to summary」→「Create Token」，把顯示的 Token 複製後貼到下方");
 
@@ -82,6 +82,7 @@ sealed class TokenStep : StepPage
             { "Account", "Cloudflare Tunnel", "Edit", "必要" },
             { "Zone", "DNS", "Edit", "必要" },
             { "Zone", "Zone", "Read", "必要" },
+            { "Zone", "Config Rules", "Edit", "API 用途" },
             { "Account", "Access: Apps and Policies", "Edit", "遠端桌面" },
             { "Account", "Access: Organizations, Identity Providers, and Groups", "Edit", "遠端桌面" },
             { "Account", "Zero Trust", "Edit", "遠端桌面" },

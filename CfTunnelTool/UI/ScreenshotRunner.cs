@@ -41,7 +41,7 @@ static class ScreenshotRunner
                 state.Routes =
                 [
                     new RouteConfig { Hostname = "www.yourdomain.com", Service = "http://localhost:8080" },
-                    new RouteConfig { Hostname = "api.yourdomain.com", Service = "http://localhost:5000" },
+                    new RouteConfig { Hostname = "api.yourdomain.com", Service = "http://localhost:5000", DisableBrowserCheck = true },
                     new RouteConfig { Hostname = "mysql.yourdomain.com", Service = "tcp://localhost:3306" },
                 ];
             if (i == 6) state.Result = new DeployResult("demo", true, "healthy", 0);

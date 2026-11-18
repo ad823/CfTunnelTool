@@ -139,7 +139,8 @@ sealed class DoneStep : StepPage
         foreach (var r in _state.Routes)
         {
             if (r.IsTcp) AddTcp(_links, r);
-            else AddLink(_links, r.PublicUrl, r.PublicUrl, $"→ 這台電腦的 {r.Service}", Theme.Sub);
+            else AddLink(_links, r.PublicUrl, r.PublicUrl,
+                $"→ 這台電腦的 {r.Service}" + (r.DisableBrowserCheck ? "（API：已關閉瀏覽器檢查，程式可直接呼叫）" : ""), Theme.Sub);
         }
         _webTitle.Text = _state.Routes.Any(r => r.IsTcp)
             ? "網站／API／TCP（網址點一下開啟；TCP 點一下複製使用者端的連線指令）："

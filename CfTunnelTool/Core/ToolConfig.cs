@@ -15,7 +15,13 @@ sealed class RouteConfig
     /// <summary>本機服務為自簽憑證 https 時設為 true</summary>
     public bool NoTlsVerify { get; set; }
 
-    public RouteConfig Clone() => new() { Hostname = Hostname, Service = Service, NoTlsVerify = NoTlsVerify };
+    /// <summary>
+    /// API 用途：關閉 Cloudflare 的 Browser Integrity Check，讓 Python、curl 等程式可以呼叫
+    /// （否則預設的 User-Agent 會被擋，回 403 Error 1010）。只對 http／https 網址有意義。
+    /// </summary>
+    public bool DisableBrowserCheck { get; set; }
+
+    public RouteConfig Clone() => new() { Hostname = Hostname, Service = Service, NoTlsVerify = NoTlsVerify, DisableBrowserCheck = DisableBrowserCheck };
 
     /// <summary>TCP 轉發（例如 MySQL）：使用者端要用 cloudflared access tcp 連線，不能用瀏覽器開。</summary>
     [JsonIgnore]
@@ -115,6 +121,7 @@ sealed partial class ToolConfig
                     throw new InvalidOperationException($"{r.Hostname} 的 TCP 服務位址要寫成 tcp://主機:連接埠，例如 tcp://localhost:3306，目前是「{r.Service}」。");
                 r.Service = $"tcp://{uri.Host}:{uri.Port}"; // 去掉結尾的 /
                 r.NoTlsVerify = false; // 只對 https 有意義
+                r.DisableBrowserCheck = false; // TCP 不經過瀏覽器檢查
             }
         }
 

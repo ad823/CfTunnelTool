@@ -64,6 +64,7 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
                必要      Account → Cloudflare Tunnel → Edit
                          Zone    → DNS               → Edit
                          Zone    → Zone              → Read
+               API 用途  Zone    → Config Rules      → Edit
                遠端桌面  Account → Access: Apps and Policies → Edit
                          Account → Access: Organizations, Identity Providers, and Groups → Edit
                          Account → Zero Trust → Edit
@@ -74,6 +75,9 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
      步驟 2  選擇網域，設定 Tunnel 名稱（預設為電腦名稱；多個地點要用不同名稱）
 
      步驟 3  對外網址，例如 api → http://localhost:5000（只用遠端桌面可以不設）
+             給程式（Python、curl、手機 App 等）呼叫的網址勾選「API 用途」，
+             部署時會替這些網址關閉 Cloudflare 的瀏覽器檢查，避免被擋（403 Error 1010）。
+             給人用瀏覽器開的網站不用勾。需要 Token 有 Zone → Config Rules → Edit。
              MySQL 等 TCP 服務：按「+ 新增 TCP」（預設 MySQL 的 3306），或填 tcp://localhost:3306
              （區網其他電腦：tcp://192.168.1.20:3306）。按下一步時會再確認一次，
              因為 TCP 網址沒有登入保護（見第九章）。
@@ -303,6 +307,13 @@ CfTunnelTool 用 Cloudflare Tunnel 做兩件事：
   Q：連線時跳出「需要重新驗證 2FA」，但沒有看到驗證網頁？
   A：按視窗裡的「重新開啟驗證頁」；仍然沒有出現時，點右下角 WARP 圖示 →
      個人資料 → 帳戶資訊 → 重新驗證。完成後等候視窗會自動連線。
+
+  Q：Python 等程式呼叫 API 網址回 403、Error 1010（browser_signature_banned），Postman 卻正常？
+  A：這是 Cloudflare 的瀏覽器檢查擋下的。精靈第 3 步替這個網址勾選「API 用途」後重新部署
+     （Token 要有 Zone → Config Rules → Edit；沒有時部署記錄會顯示手動設定方式）。
+     仍然被擋時，到 Cloudflare 主控台 → Security → Events 用回應的 cf-ray 查是哪個功能擋的；
+     免費方案的 Bot Fight Mode 無法排除，只能在 Security → Bots 關閉。
+     程式端也可以帶自己的 User-Agent，例如 MyApp/1.0。
 
   Q：cloudflared access tcp 執行後，MySQL 還是連不上？
   A：1. 程式要連 127.0.0.1 和指令裡的連接埠，不是 mysql.yourdomain.com

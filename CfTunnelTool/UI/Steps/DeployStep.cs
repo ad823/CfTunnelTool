@@ -74,7 +74,7 @@ sealed class DeployStep : StepPage
         if (_state.Routes.Count > 0)
         {
             lines.Add("網站／API／TCP：");
-            lines.AddRange(_state.Routes.Select(r => $"      {r.PublicUrl}  →  {r.Service}" + (r.IsTcp ? "（沒有登入保護）" : "")));
+            lines.AddRange(_state.Routes.Select(r => $"      {r.PublicUrl}  →  {r.Service}" + (r.IsTcp ? "（沒有登入保護）" : r.DisableBrowserCheck ? "（API：關閉瀏覽器檢查）" : "")));
         }
         if (_state.Rdp is { Enabled: true } rdp)
         {
