@@ -602,6 +602,39 @@ static class SelfTest
             Deployer.BrowserCheckManualHint(["api.example.com"]) is var hint && hint.Contains("api.example.com") &&
             hint.Contains("Config Rules") && hint.Contains("1010"));
 
+        // ---- v1.11.1：程式已開啟時再開一次，喚醒原本的視窗（用測試專用名稱，不影響正在執行的程式） ----
+        var siMutex = $@"Local\CfTunnelTool.SelfTest.M.{Guid.NewGuid():N}";
+        var siEvent = $@"Local\CfTunnelTool.SelfTest.E.{Guid.NewGuid():N}";
+        Check("單一執行個體：沒有 mutex 時 IsRunning 為 false", !SingleInstance.IsRunning(siMutex));
+        using (new Mutex(true, siMutex, out _))
+            Check("單一執行個體：已有 mutex 時 IsRunning 為 true", SingleInstance.IsRunning(siMutex));
+        Check("單一執行個體：找不到喚醒事件時回傳 OtherSession（才顯示提示）",
+            SingleInstance.SignalExisting(siEvent) == ActivateResult.OtherSession);
+        using (var signaled = new ManualResetEventSlim())
+        using (SingleInstance.Listen(signaled.Set, siEvent))
+        {
+            Check("單一執行個體：有喚醒事件時回傳 Activated",
+                SingleInstance.SignalExisting(siEvent) == ActivateResult.Activated);
+            Check("單一執行個體：原本的程式收到通知", signaled.Wait(3000));
+            signaled.Reset();
+            Check("單一執行個體：第二次通知也收得到",
+                SingleInstance.SignalExisting(siEvent) == ActivateResult.Activated && signaled.Wait(3000));
+
+            using var opened = System.Threading.EventWaitHandleAcl.OpenExisting(siEvent,
+                System.Security.AccessControl.EventWaitHandleRights.ReadPermissions);
+            var authUsers = new System.Security.Principal.SecurityIdentifier(
+                System.Security.Principal.WellKnownSidType.AuthenticatedUserSid, null);
+            var allowed = opened.GetAccessControl()
+                .GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier))
+                .Cast<System.Security.AccessControl.EventWaitHandleAccessRule>()
+                .Where(r => r.IdentityReference.Equals(authUsers) && r.AccessControlType == System.Security.AccessControl.AccessControlType.Allow)
+                .Aggregate((System.Security.AccessControl.EventWaitHandleRights)0, (a, r) => a | r.EventWaitHandleRights);
+            Check("單一執行個體：一般權限的程式可以觸發喚醒事件（不能改權限）",
+                allowed.HasFlag(System.Security.AccessControl.EventWaitHandleRights.Modify) &&
+                !allowed.HasFlag(System.Security.AccessControl.EventWaitHandleRights.ChangePermissions), allowed.ToString());
+        }
+        Check("單一執行個體：程式結束後事件消失", SingleInstance.SignalExisting(siEvent) == ActivateResult.OtherSession);
+
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
         {

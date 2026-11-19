@@ -102,7 +102,7 @@ zip 內附的 [使用說明.txt](docs/使用說明.txt) 是給實際操作人員
 </tr>
 </table>
 
-部署完成後，程式會把自己安裝到 `C:\Program Files\CfTunnelTool\`，並在開始功能表和桌面建立「CfTunnelTool」捷徑，之後開啟會直接進入管理畫面。
+部署完成後，程式會把自己安裝到 `C:\Program Files\CfTunnelTool\`，並在開始功能表和桌面建立「CfTunnelTool」捷徑，之後開啟會直接進入管理畫面。程式已經開著時再點捷徑，不會跳出 UAC 或提示，會直接切回原本的視窗（最小化時自動還原）。
 
 ## 管理者：管理畫面
 
@@ -327,7 +327,7 @@ CfTunnelTool\bin\Debug\net9.0-windows\CfTunnelTool.exe --screenshots %TEMP%\cftu
 CfTunnelTool\bin\Debug\net9.0-windows\CfTunnelTool.exe --selftest %TEMP%\cftunnel-selftest.txt
 ```
 
-自我測試涵蓋：遠端桌面主機狀態與 NLA 判斷（含 Entra ID 例外）、防火牆規則、管理帳號密碼、桌面捷徑參數與路徑、TCP 網址轉發、API 網址關閉瀏覽器檢查、設定驗證規則、連線代碼、送給 Cloudflare 的 JSON 結構、API 錯誤處理。
+自我測試涵蓋：遠端桌面主機狀態與 NLA 判斷（含 Entra ID 例外）、防火牆規則、管理帳號密碼、桌面捷徑參數與路徑、TCP 網址轉發、API 網址關閉瀏覽器檢查、重複開啟時喚醒原本的視窗、設定驗證規則、連線代碼、送給 Cloudflare 的 JSON 結構、API 錯誤處理。
 
 ### 發布新版本
 
