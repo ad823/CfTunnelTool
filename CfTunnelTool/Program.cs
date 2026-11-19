@@ -29,6 +29,10 @@ static class Program
         if (ConnectArgs.Parse(args) is { } connect)
             return QuickConnectForm.Run(connect);
 
+        // 程式已開啟時再開一次：在提權之前就處理，不跳 UAC、不跳彈窗，直接把原本的視窗帶到前面
+        if (!IsBackgroundTask(args) && SingleInstance.IsRunning())
+            return ActivateExisting();
+
         // 其他功能（安裝服務、部署、管理、啟用遠端桌面）都需要系統管理員：
         // manifest 是 asInvoker（讓上面的捷徑免 UAC），所以在這裡提權重新執行
         if (!Cloudflared.IsAdministrator())
@@ -60,12 +64,11 @@ static class Program
         if (args.Contains("--uninstall"))
             return UninstallFromAppsList();
 
-        using var mutex = new Mutex(true, @"Global\CfTunnelTool.SingleInstance", out var isFirst);
+        // 提權後再確認一次（兩次同時開啟時的競爭）
+        using var mutex = new Mutex(true, SingleInstance.MutexName, out var isFirst);
         if (!isFirst)
-        {
-            MessageBox.Show("CfTunnelTool 已經在執行中。", "CfTunnelTool", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return 0;
-        }
+            return ActivateExisting();
+        using var activation = SingleInstance.StartListener();
 
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) =>
@@ -113,6 +116,21 @@ static class Program
         }
 
         Application.Run(new DashboardForm(config));
+        return 0;
+    }
+
+    /// <summary>排程、捷徑等不開主視窗的啟動方式，不受單一執行個體限制。</summary>
+    static bool IsBackgroundTask(string[] args) =>
+        args.Contains("--return-console") || args.Contains("--collect-logs") || args.Contains("--uninstall");
+
+    /// <summary>通知原本的程式把視窗帶到前面；原本的程式在其他使用者的工作階段時才顯示提示。</summary>
+    static int ActivateExisting()
+    {
+        if (SingleInstance.SignalExisting() == ActivateResult.Activated) return 0;
+        // 找不到喚醒事件：原本的程式在其他使用者的工作階段，或是 1.11.1 以前的舊版
+        MessageBox.Show("CfTunnelTool 已經在執行中，但無法自動切換過去。\n\n" +
+                        "可能是在這台電腦的其他使用者工作階段，或是舊版本仍開著；請切換到原本的視窗，或先關閉它再開啟。",
+            "CfTunnelTool", MessageBoxButtons.OK, MessageBoxIcon.Information);
         return 0;
     }
 
