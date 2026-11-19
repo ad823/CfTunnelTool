@@ -135,6 +135,14 @@ static class SingleInstance
 
         var target = GetLastActivePopup(hwnd);
         if (target == IntPtr.Zero) target = hwnd;
+
+        // 先暫時設為最上層再取消：就算 Windows 不給焦點（前景鎖定），視窗也會顯示在其他視窗上面
+        foreach (var w in target == hwnd ? [hwnd] : new[] { hwnd, target })
+        {
+            SetWindowPos(w, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetWindowPos(w, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        }
+
         if (!SetForegroundWindow(target))
         {
             var info = new FLASHWINFO
@@ -148,6 +156,11 @@ static class SingleInstance
     }
 
     const int ASFW_ANY = -1, SW_RESTORE = 9;
+    static readonly IntPtr HWND_TOPMOST = new(-1), HWND_NOTOPMOST = new(-2);
+    const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_SHOWWINDOW = 0x40;
+
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
     const uint FLASHW_ALL = 3, FLASHW_TIMERNOFG = 12;
 
     [StructLayout(LayoutKind.Sequential)]

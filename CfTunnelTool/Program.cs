@@ -68,12 +68,14 @@ static class Program
         using var mutex = new Mutex(true, SingleInstance.MutexName, out var isFirst);
         if (!isFirst)
             return ActivateExisting();
-        using var activation = SingleInstance.StartListener();
 
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) =>
             MessageBox.Show($"發生未預期的錯誤：\n\n{e.Exception.Message}", "CfTunnelTool",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+        // 要在 SetUnhandledExceptionMode 之後：它會在 UI 執行緒建立控制項，之後就不能再改例外模式
+        using var activation = SingleInstance.StartListener();
 
         var config = TryLoadConfig();
 
