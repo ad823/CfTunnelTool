@@ -344,7 +344,8 @@ sealed class RdpDeployer(CloudflareClient cf, ILog log, Func<string, bool> confi
             else
                 rdp.GatewayRuleId = await cf.CreateGatewayRuleAsync(acc, name, rdp);
             log.Ok("Gateway 規則：被開放的電腦只開放遠端桌面連接埠（" +
-                   string.Join("、", rdp.Machines.Select(m => $"{m.Ip}:{m.Port}")) + "），其他連接埠封鎖");
+                   string.Join("、", rdp.Machines.Select(m => $"{m.Ip}:{m.Port}")) +
+                   $"）與使用狀態回報（{SessionStatus.Port}），其他連接埠封鎖");
         }
         catch (CloudflareApiException ex) when (!ex.IsForbidden)
         {

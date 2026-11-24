@@ -38,6 +38,7 @@ sealed class RdpConnectFlow(ClientConfig config, ILog log, IWin32Window? owner, 
         Status?.Invoke(m, "測試中…", Theme.Muted);
         if (await RdpHost.TestTcpAsync(m.Ip, m.Port))
         {
+            if (!await ConfirmNotInUseAsync(m)) return false;
             Launch(m);
             return true;
         }
@@ -47,6 +48,7 @@ sealed class RdpConnectFlow(ClientConfig config, ILog log, IWin32Window? owner, 
         if (AuthWaitForm.Run(owner, m, config.Team, log))
         {
             log.Ok("驗證完成");
+            if (!await ConfirmNotInUseAsync(m)) return false;
             Launch(m);
             return true;
         }
@@ -54,6 +56,33 @@ sealed class RdpConnectFlow(ClientConfig config, ILog log, IWin32Window? owner, 
         // 使用者已經在等候視窗看到原因（取消或逾時），這裡只寫記錄，不設定 LastError
         Status?.Invoke(m, "✗ 連不到", Theme.Danger);
         log.Error($"仍然連不到 {m.Name}。請確認那台電腦已開機、驗證已完成，或把記錄截圖給管理者。");
+        return false;
+    }
+
+    /// <summary>
+    /// 連線前確認那台電腦有沒有人正在使用；有人在用時詢問，預設「否」。
+    /// 那台電腦沒有啟用使用狀態回報（或是舊版）時查不到，照舊直接連線。
+    /// </summary>
+    const string Nl = "\n";
+
+    async Task<bool> ConfirmNotInUseAsync(ClientMachine m)
+    {
+        var usage = await SessionStatus.QueryAsync(m.Ip);
+        if (usage is null) return true;
+        if (SessionStatus.FindOccupant(usage, Environment.MachineName) is not { } who)
+        {
+            log.Ok($"{m.Name} 目前沒人使用");
+            return true;
+        }
+
+        Status?.Invoke(m, who.Short, Theme.Warning);
+        log.Warn($"{m.Name}：{who.Description}");
+        var answer = MessageBox.Show(owner,
+            $"{m.Name} 目前有人在使用：{Nl}{Nl}{who.Description}{Nl}{Nl}" +
+            $"現在連進去，對方的畫面會被你接手（他的遠端桌面會中斷）。建議先和對方確認。{Nl}{Nl}仍要連線嗎？",
+            "這台電腦有人在使用", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (answer == DialogResult.Yes) return true;
+        log.Info("已取消連線。");
         return false;
     }
 

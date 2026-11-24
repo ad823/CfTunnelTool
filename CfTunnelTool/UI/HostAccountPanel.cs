@@ -24,6 +24,9 @@ sealed class HostAccountPanel : TableLayoutPanel
     readonly Label _accountHint;
     readonly Button _returnShortcut;
     readonly Label _returnHint;
+    readonly Label _usageStatus;
+    readonly Button _usageInstall;
+    readonly Button _usageRemove;
     bool _accountsLoaded;
 
     public HostAccountPanel()
@@ -85,6 +88,18 @@ sealed class HostAccountPanel : TableLayoutPanel
         _returnShortcut.Click += (_, _) => CreateReturnShortcut();
         _returnHint = Inline("");
         AddFlow(_returnShortcut, _returnHint);
+
+        // ---- 使用狀態回報 ----
+        AddText("使用狀態回報（避免搶連線）：", Theme.Bold, top: 12);
+        AddText("使用者按「連線」前，程式會先確認這台電腦是否有其他人正在遠端連線中；" +
+                "有人在用時先提醒，不會直接把對方擠掉（坐在電腦前的使用者無法可靠判斷，不會提醒）。會安裝一個 Windows 服務並開放 TCP " + SessionStatus.Port +
+                "（只允許內部網路），只回報 Windows 帳號、連線來源電腦名稱與時間。", Theme.Small, Theme.Muted);
+        _usageStatus = Inline("");
+        _usageInstall = Theme.SecondaryButton("啟用使用狀態回報");
+        _usageInstall.Click += async (_, _) => await InstallUsageAsync();
+        _usageRemove = Theme.SecondaryButton("停用");
+        _usageRemove.Click += async (_, _) => await RemoveUsageAsync();
+        AddFlow(_usageStatus, _usageInstall, _usageRemove);
     }
 
     Label AddText(string text, Font font, Color? color = null, int top = 0)
@@ -173,6 +188,7 @@ sealed class HostAccountPanel : TableLayoutPanel
 
         _returnHint.Text = SelfInstaller.HasReturnConsoleShortcut ? "✓ 已建立" : "";
         _returnHint.ForeColor = Theme.Success;
+        RefreshUsage();
         if (_account.Items.Count > 0) UpdateAccountHint();
     }
 
@@ -447,6 +463,77 @@ sealed class HostAccountPanel : TableLayoutPanel
         {
             _setPassword.Enabled = true;
             UpdateAccountHint();
+        }
+    }
+
+    void RefreshUsage()
+    {
+        var status = StatusService.GetStatus();
+        if (status is null)
+        {
+            SetUsage("! 尚未啟用：使用者連線前無法得知是否有人在用", Theme.Warning, install: "啟用使用狀態回報", remove: false);
+            return;
+        }
+        if (StatusService.InstalledVersion is { } v && v != Theme.Version)
+        {
+            SetUsage($"! 服務是舊版（{v}），請更新", Theme.Warning, install: "更新", remove: true);
+            return;
+        }
+        if (status != System.ServiceProcess.ServiceControllerStatus.Running)
+        {
+            SetUsage("! 已安裝但沒有執行", Theme.Warning, install: "啟動", remove: true);
+            return;
+        }
+        var now = SessionStatus.FindOccupant(SessionStatus.QueryLocal(), "") is { } o ? o.Short : "沒人使用";
+        SetUsage($"✓ 執行中　目前：{now}", Theme.Success, install: null, remove: true);
+    }
+
+    void SetUsage(string text, Color color, string? install, bool remove)
+    {
+        _usageStatus.Text = text;
+        _usageStatus.ForeColor = color;
+        _usageInstall.Visible = install is not null;
+        if (install is not null) _usageInstall.Text = install;
+        _usageRemove.Visible = remove;
+    }
+
+    async Task InstallUsageAsync()
+    {
+        _usageInstall.Enabled = _usageRemove.Enabled = false;
+        try
+        {
+            await Task.Run(() => StatusService.Install(new NullLog()));
+            MessageBox.Show(FindForm(),
+                "已啟用使用狀態回報。\n\n" +
+                "還需要：\n" +
+                "•  中繼電腦的管理者用 CfTunnelTool 1.12.0 以上「重新部署」一次，WARP 才會放行狀態查詢\n" +
+                "•  使用者端更新到 1.12.0 以上，連線前才會檢查\n\n" +
+                "之後有人正在使用這台電腦時，其他人按「連線」會先看到提醒。",
+                "使用狀態回報", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException
+                                       or System.ComponentModel.Win32Exception or System.ServiceProcess.TimeoutException)
+        {
+            MessageBox.Show(FindForm(), "啟用失敗：\n\n" + ex.Message, "使用狀態回報", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _usageInstall.Enabled = _usageRemove.Enabled = true;
+            RefreshUsage();
+        }
+    }
+
+    async Task RemoveUsageAsync()
+    {
+        if (MessageBox.Show(FindForm(), "停用後，使用者連線前不會再檢查這台電腦是否有人在使用。確定要停用嗎？",
+                "使用狀態回報", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+        _usageInstall.Enabled = _usageRemove.Enabled = false;
+        try { await Task.Run(() => StatusService.Uninstall(new NullLog())); }
+        finally
+        {
+            _usageInstall.Enabled = _usageRemove.Enabled = true;
+            RefreshUsage();
         }
     }
 

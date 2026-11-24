@@ -467,9 +467,20 @@ sealed class ClientForm : Form
             foreach (var m in _config.Machines.Except(testable)) SetItemStatus(m, "其他地點（連線時自動切換）", Theme.Muted);
             foreach (var m in testable) SetItemStatus(m, "測試中…", Theme.Muted);
 
-            var results = await Task.WhenAll(testable.Select(async m => (m, ok: await RdpHost.TestTcpAsync(m.Ip, m.Port))));
-            foreach (var (m, ok) in results)
-                SetItemStatus(m, ok ? "✓ 可以連線" : "✗ 連不到", ok ? Theme.Success : Theme.Danger);
+            var results = await Task.WhenAll(testable.Select(async m =>
+            {
+                var ok = await RdpHost.TestTcpAsync(m.Ip, m.Port);
+                var usage = ok ? await SessionStatus.QueryAsync(m.Ip) : null;
+                return (m, ok, usage);
+            }));
+            foreach (var (m, ok, usage) in results)
+            {
+                if (!ok) SetItemStatus(m, "✗ 連不到", Theme.Danger);
+                else if (usage is null) SetItemStatus(m, "✓ 可以連線", Theme.Success);
+                else if (SessionStatus.FindOccupant(usage, Environment.MachineName) is { } who)
+                    SetItemStatus(m, "! " + who.Short, Theme.Warning);
+                else SetItemStatus(m, "✓ 可以連線（沒人使用）", Theme.Success);
+            }
             if (results.Any(r => r.ok))
             {
                 _config.LastVerifiedAt = DateTime.Now;

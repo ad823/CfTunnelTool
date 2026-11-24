@@ -34,7 +34,7 @@ static class SelfInstaller
 
     /// <summary>單一執行檔發佈時 Assembly.Location 會是空字串（這正是我們要判斷的）。</summary>
 #pragma warning disable IL3000
-    static bool IsSingleFile => string.IsNullOrEmpty(typeof(SelfInstaller).Assembly.Location);
+    internal static bool IsSingleFile => string.IsNullOrEmpty(typeof(SelfInstaller).Assembly.Location);
 #pragma warning restore IL3000
 
     static bool SamePath(string a, string b) =>
@@ -55,7 +55,10 @@ static class SelfInstaller
         if (!SamePath(current, InstalledExe))
         {
             Directory.CreateDirectory(InstallDir);
+            // 使用狀態回報服務正在執行同一個檔案時，先停止才能覆寫
+            var restartStatus = StatusService.StopIfRunning();
             File.Copy(current, InstalledExe, overwrite: true);
+            if (restartStatus) StatusService.Start();
             log.Ok($"管理程式已安裝到 {InstalledExe}");
         }
 
@@ -85,6 +88,7 @@ static class SelfInstaller
 
     public static void Uninstall(ILog log)
     {
+        StatusService.Uninstall(log); // 服務使用安裝位置的執行檔，要先移除
         foreach (var lnk in new[] { StartMenuShortcut, DesktopShortcut, ReturnConsoleShortcut })
             if (File.Exists(lnk)) File.Delete(lnk);
         Logs.CollectorSchedule.Disable(); // 移除每小時收集紀錄的排程
