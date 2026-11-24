@@ -374,7 +374,7 @@ sealed partial class CloudflareClient
     /// <summary>
     /// 封鎖條件：連到被開放電腦的 IP、但不是它的遠端桌面連接埠或使用狀態回報連接埠。同一個 port 的電腦放在同一組。
     /// 使用獨立虛擬網路時限定在該虛擬網路，不影響其他地點 IP 相同的電腦。
-    /// 例如 <c>(net.dst.ip in {192.168.1.10/32 192.168.1.11/32} and not(net.dst.port in {3389 47389}))</c>
+    /// 例如 <c>(net.dst.ip in {192.168.1.10/32 192.168.1.11/32} and not(net.dst.port in {3389 38389 48389 58389}))</c>
     /// </summary>
     internal static string GatewayBlockTraffic(RdpConfig rdp)
     {
@@ -389,9 +389,9 @@ sealed partial class CloudflareClient
             : hosts;
     }
 
-    /// <summary>放行的連接埠：遠端桌面與使用狀態回報（兩者相同時只列一次）。</summary>
+    /// <summary>放行的連接埠：遠端桌面與使用狀態回報的候選連接埠（重複的只列一次）。</summary>
     static string AllowedPorts(int rdpPort) =>
-        rdpPort == SessionStatus.Port ? $"{rdpPort}" : $"{rdpPort} {SessionStatus.Port}";
+        string.Join(' ', new[] { rdpPort }.Concat(SessionStatus.Ports).Distinct());
 
     internal static object GatewayRuleBody(string name, RdpConfig rdp) => new
     {

@@ -386,8 +386,8 @@ static class SelfTest
         var gwTraffic = CloudflareClient.GatewayBlockTraffic(gwSrc);
         sb.AppendLine("INFO  GatewayBlockTraffic = " + gwTraffic);
         Check("Gateway：依連接埠分組、封鎖其他連接埠",
-            gwTraffic == "(net.dst.ip in {192.168.1.10/32 192.168.1.12/32} and not(net.dst.port in {3389 47389}))" +
-                         " or (net.dst.ip in {192.168.1.11/32} and not(net.dst.port in {3390 47389}))", gwTraffic);
+            gwTraffic == "(net.dst.ip in {192.168.1.10/32 192.168.1.12/32} and not(net.dst.port in {3389 38389 48389 58389}))" +
+                         " or (net.dst.ip in {192.168.1.11/32} and not(net.dst.port in {3390 38389 48389 58389}))", gwTraffic);
         Check("Gateway：預設虛擬網路不加 vnet 條件", !gwTraffic.Contains("net.vnet_id"));
         gwSrc.UseOwnVnet = true;
         gwSrc.VnetId = "v-1";
@@ -672,19 +672,46 @@ static class SelfTest
         Check("使用狀態：壞掉的回應視為查不到", SessionStatus.FromJson("not json") is null);
         using (var server = new StatusServer(0, System.Net.IPAddress.Loopback, () => demoUsage))
         {
-            var got = SessionStatus.QueryAsync("127.0.0.1", server.Port).GetAwaiter().GetResult();
+            var got = SessionStatus.QueryPortAsync("127.0.0.1", server.Port, 1500).GetAwaiter().GetResult();
             Check("使用狀態：TCP 伺服器回報、用戶端查詢", got is not null && got.Sessions.SequenceEqual(demoUsage.Sessions), server.Port.ToString());
         }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Check("使用狀態：沒有啟用的電腦查不到（照舊直接連線）",
-            SessionStatus.QueryAsync("127.0.0.1", 1, 1500).GetAwaiter().GetResult() is null && sw.ElapsedMilliseconds < 2500, $"{sw.ElapsedMilliseconds} ms");
-        Check("使用狀態：防火牆只允許內部網路、TCP 47389",
-            StatusService.FirewallScript() is var statusFw && statusFw.Contains("-LocalPort 47389") &&
+            SessionStatus.QueryPortAsync("127.0.0.1", 1, 1500).GetAwaiter().GetResult() is null && sw.ElapsedMilliseconds < 2500, $"{sw.ElapsedMilliseconds} ms");
+        Check("使用狀態：防火牆只允許內部網路、三個候選連接埠",
+            StatusService.FirewallScript() is var statusFw && statusFw.Contains("-LocalPort 38389,48389,58389") &&
             statusFw.Contains("-RemoteAddress LocalSubnet,10.0.0.0/8") && !statusFw.Contains("Any,") && statusFw.Contains("-Protocol TCP"), statusFw);
         var gwSame = Good();
         gwSame.Machines = [new RdpMachine { Name = "p", Ip = "192.168.1.20", Port = SessionStatus.Port }];
         Check("使用狀態：Gateway 連接埠和遠端桌面相同時只列一次",
-            CloudflareClient.GatewayBlockTraffic(gwSame).Contains("not(net.dst.port in {47389}))"), CloudflareClient.GatewayBlockTraffic(gwSame));
+            CloudflareClient.GatewayBlockTraffic(gwSame).Contains("not(net.dst.port in {38389 48389 58389}))"), CloudflareClient.GatewayBlockTraffic(gwSame));
+
+        // 第一個候選被占用（例如被 Hyper-V 保留）時，服務改用下一個；用戶端同時查所有候選
+        var busyPort = new System.Net.Sockets.TcpListener(System.Net.IPAddress.IPv6Any, 0);
+        busyPort.Server.DualMode = true;
+        busyPort.Start();
+        var taken = ((System.Net.IPEndPoint)busyPort.LocalEndpoint).Port;
+        var freePort = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        freePort.Start();
+        var spare = ((System.Net.IPEndPoint)freePort.LocalEndpoint).Port;
+        freePort.Stop();
+        try
+        {
+            using var fallback = StatusService.StartOnFirstFreePort([taken, spare]);
+            Check("使用狀態：第一個連接埠被占用時改用下一個", fallback.Port == spare, $"占用 {taken}，改用 {fallback.Port}");
+        }
+        catch (InvalidOperationException ex) { Check("使用狀態：第一個連接埠被占用時改用下一個", false, ex.Message); }
+        finally { busyPort.Stop(); }
+        Check("使用狀態：所有候選都不能用時說明原因",
+            new Func<bool>(() =>
+            {
+                var b = new System.Net.Sockets.TcpListener(System.Net.IPAddress.IPv6Any, 0);
+                b.Server.DualMode = true;
+                b.Start();
+                try { using var _ = StatusService.StartOnFirstFreePort([((System.Net.IPEndPoint)b.LocalEndpoint).Port]); return false; }
+                catch (InvalidOperationException ex) { return ex.Message.Contains("都無法使用"); }
+                finally { b.Stop(); }
+            })());
 
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try
