@@ -26,8 +26,28 @@ sealed record Occupant(SessionInfo Session, string Short, string Description);
 /// </summary>
 static class SessionStatus
 {
-    /// <summary>狀態回報的 TCP 連接埠（WARP 的 Gateway 規則會放行這個連接埠）。</summary>
-    public const int Port = 47389;
+    /// <summary>
+    /// 狀態回報的 TCP 連接埠候選（WARP 的 Gateway 規則與防火牆都放行這三個）。
+    /// Hyper-V、WSL、Docker 會在動態連接埠範圍裡任意保留整段連接埠，固定一個可能剛好被占走：
+    /// 服務依序使用第一個綁得到的，安裝時再用 netsh 手動保留，之後就不會被搶走。
+    /// </summary>
+    public static readonly int[] Ports = [38389, 48389, 58389];
+
+    /// <summary>主要的連接埠（顯示用）。</summary>
+    public static int Port => Ports[0];
+
+    /// <summary>同時查詢所有候選連接埠，回傳第一個有效的回應；都查不到時回傳 null。</summary>
+    public static async Task<MachineUsage?> QueryAsync(string ip, int timeoutMs = 1500)
+    {
+        var pending = Ports.Select(p => QueryPortAsync(ip, p, timeoutMs)).ToList();
+        while (pending.Count > 0)
+        {
+            var done = await Task.WhenAny(pending);
+            pending.Remove(done);
+            if (await done is { } usage) return usage;
+        }
+        return null;
+    }
 
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -39,8 +59,8 @@ static class SessionStatus
         catch (JsonException) { return null; }
     }
 
-    /// <summary>查詢被連線電腦的使用狀態；那台電腦沒有啟用狀態回報（或連不到）時回傳 null。</summary>
-    public static async Task<MachineUsage?> QueryAsync(string ip, int port = Port, int timeoutMs = 1500)
+    /// <summary>查詢被連線電腦某個連接埠的使用狀態；那台電腦沒有啟用狀態回報（或連不到）時回傳 null。</summary>
+    public static async Task<MachineUsage?> QueryPortAsync(string ip, int port, int timeoutMs)
     {
         try
         {

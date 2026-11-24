@@ -92,8 +92,8 @@ sealed class HostAccountPanel : TableLayoutPanel
         // ---- 使用狀態回報 ----
         AddText("使用狀態回報（避免搶連線）：", Theme.Bold, top: 12);
         AddText("使用者按「連線」前，程式會先確認這台電腦是否有其他人正在遠端連線中；" +
-                "有人在用時先提醒，不會直接把對方擠掉（坐在電腦前的使用者無法可靠判斷，不會提醒）。會安裝一個 Windows 服務並開放 TCP " + SessionStatus.Port +
-                "（只允許內部網路），只回報 Windows 帳號、連線來源電腦名稱與時間。", Theme.Small, Theme.Muted);
+                "有人在用時先提醒，不會直接把對方擠掉（坐在電腦前的使用者無法可靠判斷，不會提醒）。會安裝一個 Windows 服務並開放 TCP " + string.Join("、", SessionStatus.Ports) +
+                "（只允許內部網路；使用第一個沒被系統保留的），只回報 Windows 帳號、連線來源電腦名稱與時間。", Theme.Small, Theme.Muted);
         _usageStatus = Inline("");
         _usageInstall = Theme.SecondaryButton("啟用使用狀態回報");
         _usageInstall.Click += async (_, _) => await InstallUsageAsync();

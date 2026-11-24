@@ -74,7 +74,55 @@ sealed class StatusService : ServiceBase
 
     public StatusService() => ServiceName = Name;
 
-    protected override void OnStart(string[] args) => _server = new StatusServer(SessionStatus.Port);
+    protected override void OnStart(string[] args) => _server = StartOnFirstFreePort();
+
+    /// <summary>依序嘗試候選連接埠，用第一個綁得到的（被系統保留的會被拒絕）。</summary>
+    internal static StatusServer StartOnFirstFreePort(IReadOnlyList<int>? ports = null)
+    {
+        SocketException? last = null;
+        foreach (var port in ports ?? SessionStatus.Ports)
+        {
+            try { return new StatusServer(port); }
+            catch (SocketException ex) { last = ex; }
+        }
+        throw new InvalidOperationException(
+            $"連接埠 {string.Join("、", ports ?? SessionStatus.Ports)} 都無法使用（可能被系統保留或其他程式占用）。", last);
+    }
+
+    /// <summary>這個連接埠現在能不能綁定（沒有被系統保留、也沒有其他程式在用）。</summary>
+    static bool CanBind(int port)
+    {
+        try
+        {
+            var l = new TcpListener(IPAddress.IPv6Any, port);
+            l.Server.DualMode = true;
+            l.Start();
+            l.Stop();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 用 netsh 手動保留第一個綁得到的候選連接埠（IPv4 與 IPv6），之後 Hyper-V 等元件就不會把它占走。
+    /// 手動保留的連接埠，程式仍然可以明確綁定。回傳保留的連接埠；都綁不到時回傳 null。
+    /// </summary>
+    static int? ReservePort(ILog log)
+    {
+        foreach (var port in SessionStatus.Ports)
+        {
+            if (!CanBind(port)) continue;
+            foreach (var ip in new[] { "ipv4", "ipv6" })
+                Cloudflared.Run("netsh.exe", "int", ip, "add", "excludedportrange", "protocol=tcp",
+                    $"startport={port}", "numberofports=1", "store=persistent"); // 已經保留過會回錯誤，忽略
+            log.Ok($"使用狀態回報使用 TCP {port}（已保留，不會被其他元件占走）");
+            return port;
+        }
+        return null;
+    }
 
     protected override void OnStop()
     {
@@ -157,8 +205,12 @@ sealed class StatusService : ServiceBase
         var fw = Cloudflared.Run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", FirewallScript());
         if (fw.ExitCode != 0)
             throw new InvalidOperationException("開放使用狀態回報的防火牆失敗：\n" + fw.Output.Trim());
-        log.Ok($"已開放防火牆 TCP {SessionStatus.Port}（只允許內部網路）");
+        log.Ok($"已開放防火牆 TCP {string.Join("、", SessionStatus.Ports)}（只允許內部網路）");
 
+        if (ReservePort(log) is null)
+            throw new InvalidOperationException(
+                $"TCP {string.Join("、", SessionStatus.Ports)} 都無法使用（可能被 Hyper-V、WSL、Docker 保留或其他程式占用）。\n" +
+                "可以用「netsh interface ipv4 show excludedportrange protocol=tcp」查看被保留的範圍。");
         Start();
         log.Ok("使用狀態回報服務已啟動");
     }
@@ -168,7 +220,7 @@ sealed class StatusService : ServiceBase
         "$ErrorActionPreference='Stop'; " +
         $"Remove-NetFirewallRule -Name '{FirewallRuleName}' -ErrorAction SilentlyContinue; " +
         $"New-NetFirewallRule -Name '{FirewallRuleName}' -DisplayName '{DisplayNameText}' -Direction Inbound " +
-        $"-Protocol TCP -LocalPort {SessionStatus.Port} -RemoteAddress {string.Join(',', RdpHost.InternalAddresses)} " +
+        $"-Protocol TCP -LocalPort {string.Join(',', SessionStatus.Ports)} -RemoteAddress {string.Join(',', RdpHost.InternalAddresses)} " +
         "-Action Allow -Profile Any | Out-Null";
 
     /// <summary>停止並刪除服務與防火牆規則（解除安裝時呼叫；沒有安裝時不做任何事）。</summary>
@@ -179,6 +231,11 @@ sealed class StatusService : ServiceBase
         Cloudflared.Run("sc.exe", "delete", Name);
         Cloudflared.Run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
             $"Remove-NetFirewallRule -Name '{FirewallRuleName}' -ErrorAction SilentlyContinue");
+        // 取消安裝時手動保留的連接埠（沒有保留過的會回錯誤，忽略）
+        foreach (var port in SessionStatus.Ports)
+            foreach (var ip in new[] { "ipv4", "ipv6" })
+                Cloudflared.Run("netsh.exe", "int", ip, "delete", "excludedportrange", "protocol=tcp",
+                    $"startport={port}", "numberofports=1", "store=persistent");
         log.Ok("已移除使用狀態回報服務");
     }
 }
