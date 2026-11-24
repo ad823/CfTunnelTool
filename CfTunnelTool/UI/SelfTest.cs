@@ -386,8 +386,8 @@ static class SelfTest
         var gwTraffic = CloudflareClient.GatewayBlockTraffic(gwSrc);
         sb.AppendLine("INFO  GatewayBlockTraffic = " + gwTraffic);
         Check("Gateway：依連接埠分組、封鎖其他連接埠",
-            gwTraffic == "(net.dst.ip in {192.168.1.10/32 192.168.1.12/32} and not(net.dst.port in {3389}))" +
-                         " or (net.dst.ip in {192.168.1.11/32} and not(net.dst.port in {3390}))", gwTraffic);
+            gwTraffic == "(net.dst.ip in {192.168.1.10/32 192.168.1.12/32} and not(net.dst.port in {3389 47389}))" +
+                         " or (net.dst.ip in {192.168.1.11/32} and not(net.dst.port in {3390 47389}))", gwTraffic);
         Check("Gateway：預設虛擬網路不加 vnet 條件", !gwTraffic.Contains("net.vnet_id"));
         gwSrc.UseOwnVnet = true;
         gwSrc.VnetId = "v-1";
@@ -634,6 +634,57 @@ static class SelfTest
                 !allowed.HasFlag(System.Security.AccessControl.EventWaitHandleRights.ChangePermissions), allowed.ToString());
         }
         Check("單一執行個體：程式結束後事件消失", SingleInstance.SignalExisting(siEvent) == ActivateResult.OtherSession);
+
+        // ---- v1.12.0：使用狀態回報，避免搶連線 ----
+        var localUsage = SessionStatus.QueryLocal();
+        sb.AppendLine("INFO  QueryLocal = " + SessionStatus.ToJson(localUsage));
+        Check("使用狀態：讀得到本機電腦名稱與目前的工作階段",
+            localUsage.Machine == Environment.MachineName &&
+            localUsage.Sessions.Any(x => x.Active && x.User.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase)),
+            string.Join(", ", localUsage.Sessions.Select(x => $"{x.User}/{(x.Remote ? "remote" : "console")}/{(x.Active ? "active" : "disc")}")));
+        var usageT0 = new DateTime(2026, 11, 24, 2, 20, 0, DateTimeKind.Utc);
+        SessionInfo Remote(string client, bool active = true, int? idle = 3) => new("alice", client, true, active, false, usageT0, idle);
+        SessionInfo Console(bool? locked, int? idle) => new("bob", "", false, true, locked, usageT0, idle);
+        MachineUsage Usage(params SessionInfo[] ss) => new("1.12.0", "OFFICE-PC", [.. ss]);
+        var occRemote = SessionStatus.FindOccupant(Usage(Remote("ACCT-PC")), "MY-PC");
+        Check("使用狀態：別台電腦的遠端工作階段算使用中",
+            occRemote is { } o1 && o1.Short == "使用中：alice（遠端）" && o1.Description.Contains("從 ACCT-PC") && o1.Description.Contains("閒置 3 分鐘"),
+            occRemote?.Description ?? "null");
+        Check("使用狀態：自己這台電腦連進去的不算（含 15 字元截斷）",
+            SessionStatus.FindOccupant(Usage(Remote("MY-PC")), "my-pc") is null &&
+            SessionStatus.FindOccupant(Usage(Remote("VERYLONGCOMPUTE")), "VERYLONGCOMPUTERNAME1") is null);
+        Check("使用狀態：已中斷的遠端工作階段不算", SessionStatus.FindOccupant(Usage(Remote("ACCT-PC", active: false)), "MY-PC") is null);
+        Check("使用狀態：電腦前的工作階段不提醒（開機自動登入、無法判斷是否有人）",
+            SessionStatus.FindOccupant(Usage(Console(false, 0), Console(true, null)), "MY-PC") is null);
+        Check("使用狀態：電腦前與遠端同時存在時，提醒遠端的人",
+            SessionStatus.FindOccupant(Usage(Console(false, 1), Remote("ACCT-PC")), "MY-PC")?.Session.User == "alice");
+        Check("使用狀態：沒有閒置資訊時不顯示閒置時間",
+            SessionStatus.FindOccupant(Usage(Remote("ACCT-PC", idle: null)), "MY-PC")?.Description is { } dNoIdle &&
+            !dNoIdle.Contains("閒置") && dNoIdle.EndsWith(" 起）"), SessionStatus.FindOccupant(Usage(Remote("ACCT-PC", idle: null)), "MY-PC")?.Description ?? "null");
+        Check("使用狀態：本機電腦前的工作階段不帶閒置時間（不可靠）",
+            localUsage.Sessions.Where(x => !x.Remote).All(x => x.IdleMinutes is null));
+        var demoUsage = Usage(Remote("ACCT-PC"), Console(true, null));
+        var usageJson = SessionStatus.ToJson(demoUsage);
+        sb.AppendLine("INFO  MachineUsage JSON = " + usageJson);
+        var usageBack = SessionStatus.FromJson(usageJson);
+        Check("使用狀態：JSON 讀回內容相同",
+            usageBack is not null && usageBack.Machine == "OFFICE-PC" && usageBack.Sessions.SequenceEqual(demoUsage.Sessions), usageJson);
+        Check("使用狀態：壞掉的回應視為查不到", SessionStatus.FromJson("not json") is null);
+        using (var server = new StatusServer(0, System.Net.IPAddress.Loopback, () => demoUsage))
+        {
+            var got = SessionStatus.QueryAsync("127.0.0.1", server.Port).GetAwaiter().GetResult();
+            Check("使用狀態：TCP 伺服器回報、用戶端查詢", got is not null && got.Sessions.SequenceEqual(demoUsage.Sessions), server.Port.ToString());
+        }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Check("使用狀態：沒有啟用的電腦查不到（照舊直接連線）",
+            SessionStatus.QueryAsync("127.0.0.1", 1, 1500).GetAwaiter().GetResult() is null && sw.ElapsedMilliseconds < 2500, $"{sw.ElapsedMilliseconds} ms");
+        Check("使用狀態：防火牆只允許內部網路、TCP 47389",
+            StatusService.FirewallScript() is var statusFw && statusFw.Contains("-LocalPort 47389") &&
+            statusFw.Contains("-RemoteAddress LocalSubnet,10.0.0.0/8") && !statusFw.Contains("Any,") && statusFw.Contains("-Protocol TCP"), statusFw);
+        var gwSame = Good();
+        gwSame.Machines = [new RdpMachine { Name = "p", Ip = "192.168.1.20", Port = SessionStatus.Port }];
+        Check("使用狀態：Gateway 連接埠和遠端桌面相同時只列一次",
+            CloudflareClient.GatewayBlockTraffic(gwSame).Contains("not(net.dst.port in {47389}))"), CloudflareClient.GatewayBlockTraffic(gwSame));
 
         // ---- 官方 WARP 安裝程式網址（只用 HEAD，不下載） ----
         try

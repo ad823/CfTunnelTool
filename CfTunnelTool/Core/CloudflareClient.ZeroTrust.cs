@@ -372,16 +372,16 @@ sealed partial class CloudflareClient
     // ---------- Gateway 網路規則：被開放的電腦只開放遠端桌面連接埠 ----------
 
     /// <summary>
-    /// 封鎖條件：連到被開放電腦的 IP、但不是它的遠端桌面連接埠。同一個 port 的電腦放在同一組。
+    /// 封鎖條件：連到被開放電腦的 IP、但不是它的遠端桌面連接埠或使用狀態回報連接埠。同一個 port 的電腦放在同一組。
     /// 使用獨立虛擬網路時限定在該虛擬網路，不影響其他地點 IP 相同的電腦。
-    /// 例如 <c>(net.dst.ip in {192.168.1.10/32 192.168.1.11/32} and not(net.dst.port in {3389}))</c>
+    /// 例如 <c>(net.dst.ip in {192.168.1.10/32 192.168.1.11/32} and not(net.dst.port in {3389 47389}))</c>
     /// </summary>
     internal static string GatewayBlockTraffic(RdpConfig rdp)
     {
         var groups = rdp.Machines
             .GroupBy(m => m.Port)
             .OrderBy(g => g.Key)
-            .Select(g => $"(net.dst.ip in {{{string.Join(' ', g.Select(m => $"{m.Ip}/32"))}}} and not(net.dst.port in {{{g.Key}}}))")
+            .Select(g => $"(net.dst.ip in {{{string.Join(' ', g.Select(m => $"{m.Ip}/32"))}}} and not(net.dst.port in {{{AllowedPorts(g.Key)}}}))")
             .ToList();
         var hosts = string.Join(" or ", groups);
         return rdp.UseOwnVnet && !string.IsNullOrEmpty(rdp.VnetId)
@@ -389,10 +389,14 @@ sealed partial class CloudflareClient
             : hosts;
     }
 
+    /// <summary>放行的連接埠：遠端桌面與使用狀態回報（兩者相同時只列一次）。</summary>
+    static string AllowedPorts(int rdpPort) =>
+        rdpPort == SessionStatus.Port ? $"{rdpPort}" : $"{rdpPort} {SessionStatus.Port}";
+
     internal static object GatewayRuleBody(string name, RdpConfig rdp) => new
     {
         name,
-        description = "CfTunnelTool：被開放的電腦透過 WARP 只能連遠端桌面連接埠，其他連接埠一律封鎖",
+        description = "CfTunnelTool：被開放的電腦透過 WARP 只能連遠端桌面與使用狀態回報連接埠，其他連接埠一律封鎖",
         action = "block",
         enabled = true,
         filters = new[] { "l4" },

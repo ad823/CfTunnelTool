@@ -25,6 +25,13 @@ static class Program
         }
 #endif
 
+        // 被連線電腦的「使用狀態回報」Windows 服務（由服務控制管理員啟動，以 LocalSystem 執行）
+        if (args.Contains(StatusService.Argument))
+        {
+            System.ServiceProcess.ServiceBase.Run(new StatusService());
+            return 0;
+        }
+
         // 桌面的遠端桌面捷徑：一般權限就能執行（不跳 UAC），先檢查驗證、需要時自動開驗證頁，再開遠端桌面
         if (ConnectArgs.Parse(args) is { } connect)
             return QuickConnectForm.Run(connect);
@@ -37,6 +44,15 @@ static class Program
         // manifest 是 asInvoker（讓上面的捷徑免 UAC），所以在這裡提權重新執行
         if (!Cloudflared.IsAdministrator())
             return RelaunchAsAdministrator(args);
+
+#if DEBUG
+        // 開發用：直接開「被連線的電腦」畫面（不受單一執行個體限制，方便在已設定的電腦上測試）
+        if (args.Contains("--host-setup"))
+        {
+            Application.Run(new HostSetupForm());
+            return 0;
+        }
+#endif
 
         // 「結束遠端並交還畫面」捷徑：不開任何視窗，直接交還
         if (args.Contains("--return-console"))
@@ -123,7 +139,8 @@ static class Program
 
     /// <summary>排程、捷徑等不開主視窗的啟動方式，不受單一執行個體限制。</summary>
     static bool IsBackgroundTask(string[] args) =>
-        args.Contains("--return-console") || args.Contains("--collect-logs") || args.Contains("--uninstall");
+        args.Contains("--return-console") || args.Contains("--collect-logs") || args.Contains("--uninstall") ||
+        args.Contains("--host-setup"); // 開發用（只有 Debug 版會處理）
 
     /// <summary>通知原本的程式把視窗帶到前面；原本的程式在其他使用者的工作階段時才顯示提示。</summary>
     static int ActivateExisting()
